@@ -29,6 +29,7 @@ sys.path.insert(0, str(_HERE))                 # dla power_screen
 sys.path.insert(0, str(_HERE.parent))          # dla pakietu vc_lib
 from vc_lib import (recommend, preset_params, PRESETS, VC_UNITS, BINDING_PL,  # noqa: E402
                     DEFAULTS)
+from vc_lib import config  # noqa: E402
 
 if __name__ == '__main__' and '--selftest' in sys.argv:
     from vc_lib.core import _selftest
@@ -65,11 +66,21 @@ ABS_X, ABS_Y = 16, 17
 
 STEP_MODES = [0.1, 1, 10, 100, 1000]
 
+
+def pl(x, nd=1):
+    """Liczba z POLSKIM separatorem dziesiętnym (przecinek), nd miejsc."""
+    return f'{x:.{nd}f}'.replace('.', ',')
+
+
+def plg(x):
+    """Liczba w formacie 'g' z przecinkiem (bez zbędnych zer)."""
+    return f'{x:g}'.replace('.', ',')
+
 # Pola: (name, unit, default, step_base, min, max, kind, desc)
 #   kind: 'num' (krok=STEP_MODES), 'int' (±1), 'idx' (cykl z zawijaniem)
 FIELDS = [
     ('preset',       '',        0,      1,   0, len(PRESETS) - 1, 'idx', 'Preset (operacja/materiał)'),
-    ('diameter_mm',  'mm',      115.0,  1.0, 0.5, 2000,   'num', 'Średnica narzędzia D'),
+    ('diameter_mm',  'mm',      125.0,  1.0, 0.5, 2000,   'num', 'Średnica narzędzia D'),
     ('vc',           '',        80.0,   1.0, 0.1, 100000, 'num', 'Prędkość skrawania v_c'),
     ('vc_unit',      '',        0,      1,   0, 1,        'idx', 'Jednostka v_c'),
     ('rpm_min',      'obr/min', 3000,   100, 0, 200000,   'num', 'Min obroty maszyny'),
@@ -81,27 +92,36 @@ LOG = Path('/mnt/data/anbervc.log')
 
 
 class VcApp:
-    def __init__(self):
+    def __init__(self, headless=False):
+        self.headless = headless
         try:
             self._dbg = LOG.open('a', encoding='utf-8')
         except Exception:
             self._dbg = open(os.devnull, 'w')
-        self._log(f'=== START {time.strftime("%H:%M:%S")} ===')
+        self._log(f'=== START {time.strftime("%H:%M:%S")} '
+                  f'{"(shot)" if headless else ""}===')
 
         self.field_idx = 0
         self.step_idx = 1                      # domyślnie krok = 1
         self.vals = {f[0]: f[2] for f in FIELDS}
-        self._load_preset(0)                   # domyślny preset = szlifierka
+        try:                                   # opcjonalny preset startowy (env)
+            _p0 = int(os.environ.get('ANBERVC_PRESET', '0'))
+        except ValueError:
+            _p0 = 0
+        _p0 = max(0, min(len(PRESETS) - 1, _p0))
+        self._load_preset(_p0)                 # domyślny preset = szlifierka (0)
+        # persystencja: zapisany stan > domyślny preset (uszkodzony/brak → default)
+        if not headless:                       # --shot deterministyczny (bez configu)
+            self._apply_saved_config()
         self.rec = None
         self.dirty = True
+        self._cfg_dirty = False
+        self._cfg_next_save = 0
+        self._quit_done = False
+        self._status = ''
+        self._status_until = 0
         self._recompute()
 
-        sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO | sdl2.SDL_INIT_EVENTS)
-        self.win = sdl2.SDL_CreateWindow(
-            b"AnberVc", sdl2.SDL_WINDOWPOS_UNDEFINED, sdl2.SDL_WINDOWPOS_UNDEFINED,
-            0, 0, sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP | sdl2.SDL_WINDOW_SHOWN)
-        self.ren = sdl2.SDL_CreateRenderer(self.win, -1, sdl2.SDL_RENDERER_SOFTWARE) \
-            or sdl2.SDL_CreateRenderer(self.win, -1, 0)
         self.img = Image.new('RGBA', (W, H), BG)
         self.draw = ImageDraw.Draw(self.img)
         self.f_sm = ImageFont.truetype(FONT_PATH, 13)
@@ -109,6 +129,18 @@ class VcApp:
         self.f_lg = ImageFont.truetype(FONT_PATH, 22)
         self.f_xl = ImageFont.truetype(FONT_PATH, 30)
         self._tex = None
+
+        if headless:                           # tryb --shot: bez SDL/evdev/power
+            self._gp = None
+            self._pwr = None
+            return
+
+        sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO | sdl2.SDL_INIT_EVENTS)
+        self.win = sdl2.SDL_CreateWindow(
+            b"AnberVc", sdl2.SDL_WINDOWPOS_UNDEFINED, sdl2.SDL_WINDOWPOS_UNDEFINED,
+            0, 0, sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP | sdl2.SDL_WINDOW_SHOWN)
+        self.ren = sdl2.SDL_CreateRenderer(self.win, -1, sdl2.SDL_RENDERER_SOFTWARE) \
+            or sdl2.SDL_CreateRenderer(self.win, -1, 0)
 
         # event1 = pad + D-pad (grab z fallbackiem no-grab), jak AnberHex
         self._gp = None
@@ -128,6 +160,7 @@ class VcApp:
                 self._gp = None
 
         self._pwr = ScreenPowerToggle()        # POWER → ekran off/on (event0)
+        self._pwr.ensure_on()                  # odzyskaj ekran, jeśli był wygaszony
 
     def _log(self, msg):
         try:
@@ -146,6 +179,38 @@ class VcApp:
         self.vals['rpm_max'] = p['rpm_max']
         self.vals['n_settings'] = int(p['n_settings'])
         self.vals['tool_max_rpm'] = p['tool_max_rpm']
+
+    # ── persystencja parametrów (trwała /mnt/data/anbervc_config.json) ────────
+    def _apply_saved_config(self):
+        """Nałóż zapisany stan na wartości (zapisane > preset). Uszkodzone/brak →
+        zostaje domyślny preset (bez crasha)."""
+        data = config.load()
+        if not isinstance(data, dict):
+            return
+        v = data.get('vals', data)             # akceptuj też format płaski
+        if not isinstance(v, dict):
+            return
+        try:
+            for name, unit, dflt, sb, mn, mx, kind, desc in FIELDS:
+                if name in v:
+                    val = int(v[name]) if kind in ('idx', 'int') else float(v[name])
+                    self.vals[name] = max(mn, min(mx, val))
+            if 'field_idx' in data:
+                self.field_idx = int(data['field_idx']) % len(FIELDS)
+            if 'step_idx' in data:
+                self.step_idx = int(data['step_idx']) % len(STEP_MODES)
+        except Exception as e:
+            self._log(f'config apply ERR: {e} → domyślny preset')
+            self.vals = {f[0]: f[2] for f in FIELDS}
+            self._load_preset(0)
+
+    def _config_snapshot(self):
+        return {'vals': {k: self.vals[k] for k in self.vals},
+                'field_idx': self.field_idx, 'step_idx': self.step_idx}
+
+    def _save_config(self):
+        config.save(self._config_snapshot())
+        self._cfg_dirty = False
 
     def _reset_field(self, name):
         """Reset pola do wartości z bieżącego presetu."""
@@ -175,10 +240,34 @@ class VcApp:
             v = self.vals[name] + dy * factor
             self.vals[name] = max(mn, min(mx, round(v, 6)))
         self.dirty = True
+        self._cfg_dirty = True
         self._recompute()
 
     def _cycle_step(self):
         self.step_idx = (self.step_idx + 1) % len(STEP_MODES)
+        self.dirty = True
+        self._cfg_dirty = True
+
+    def _make_report(self):
+        """R2 → raport PDF do druku (wspólny silnik serii Anber*)."""
+        if self.rec is None:
+            return
+        self._status = 'Generuję PDF...'
+        self.dirty = True
+        self.render()
+        try:
+            from vc_lib.report import generate_pdf
+            params = {k: self.vals[k] for k in (
+                'diameter_mm', 'vc', 'rpm_min', 'rpm_max', 'n_settings', 'tool_max_rpm')}
+            params['vc_unit'] = VC_UNITS[int(self.vals['vc_unit'])]
+            operacja = PRESETS[int(self.vals['preset'])]['name']
+            path = generate_pdf(params, self.rec, operacja)
+            self._status = f'Zapisano PDF: {path}'
+            self._log(f'PDF: {path}')
+        except Exception as e:
+            self._status = f'Blad PDF: {e}'
+            self._log(f'PDF ERR: {e}')
+        self._status_until = sdl2.SDL_GetTicks() + 6000
         self.dirty = True
 
     def _recompute(self):
@@ -197,6 +286,27 @@ class VcApp:
     def _t(self, x, y, txt, font, color):
         self.draw.text((x, y), txt, font=font, fill=color)
 
+    def _clip(self, txt, font, maxpx):
+        """Przytnij tekst do maxpx px (z wielokropkiem), by nie wychodził poza kolumnę."""
+        if self.draw.textlength(txt, font=font) <= maxpx:
+            return txt
+        while txt and self.draw.textlength(txt + '…', font=font) > maxpx:
+            txt = txt[:-1]
+        return txt + '…'
+
+    def _wrap(self, txt, font, maxpx):
+        """Zawijanie po słowach do maxpx px (wieloliniowo, BEZ ucinania treści)."""
+        words, lines, cur = txt.split(' '), [], ''
+        for w in words:
+            trial = w if not cur else cur + ' ' + w
+            if cur and self.draw.textlength(trial, font=font) > maxpx:
+                lines.append(cur); cur = w
+            else:
+                cur = trial
+        if cur:
+            lines.append(cur)
+        return lines
+
     def _fmt_val(self, name, v):
         if name == 'vc_unit':
             return VC_UNITS[int(v)]
@@ -205,16 +315,20 @@ class VcApp:
         if name == 'n_settings':
             return str(int(v))
         if isinstance(v, float):
-            return f'{v:g}'
+            return plg(v)
         return str(v)
 
     def render(self):
+        self._draw()
+        self._blit()
+
+    def _draw(self):
         d = self.draw
         d.rectangle([(0, 0), (W, H)], fill=BG)
         self._t(14, 8, 'AnberVc', self.f_lg, ACC)
-        self._t(150, 16, 'dobór obrotów: szlifowanie / wiercenie / frezowanie',
+        self._t(150, 16, 'szlifowanie · wiercenie · frezowanie',
                 self.f_sm, DIM)
-        self._t(W - 150, 16, f'krok: {STEP_MODES[self.step_idx]:g}', self.f_sm, YEL)
+        self._t(W - 96, 16, f'krok: {plg(STEP_MODES[self.step_idx])}', self.f_sm, YEL)
         d.line([(0, 38), (W, 38)], fill=SEP, width=1)
 
         # ── lewa kolumna: parametry ──
@@ -224,11 +338,11 @@ class VcApp:
             sel = (i == self.field_idx)
             col = SEL if sel else FG
             mark = '>' if sel else ' '
-            self._t(12, y, f'{mark} {desc}', self.f_sm, col)
+            self._t(12, y, self._clip(f'{mark} {desc}', self.f_sm, 292), self.f_sm, col)
             val_str = self._fmt_val(name, self.vals[name])
             unit_str = f' {unit}' if unit else ''
-            self._t(28, y + 14, f'{val_str}{unit_str}', self.f_md,
-                    col if sel else DIM)
+            self._t(28, y + 14, self._clip(f'{val_str}{unit_str}', self.f_md, 278),
+                    self.f_md, col if sel else DIM)
             y += 34
         d.line([(312, 38), (312, H - 26)], fill=SEP, width=1)
 
@@ -239,8 +353,9 @@ class VcApp:
             self._t(rx, 60, 'błąd obliczeń', self.f_lg, RED)
         else:
             binding = BINDING_PL.get(r.binding, r.binding)
-            self._t(rx, 46, f'n_bezp = {r.n_safe:.0f} obr/min', self.f_md, ACC)
-            self._t(rx, 66, f'(wiąże: {binding})', self.f_sm, DIM)
+            self._t(rx, 46, f'n_bezp = {pl(r.n_safe, 0)} obr/min', self.f_md, ACC)
+            self._t(rx, 66, self._clip(f'(wiąże: {binding})', self.f_sm, W - rx - 8),
+                    self.f_sm, DIM)
 
             if r.recommended_k is None:
                 d.rectangle([(rx, 86), (W - 10, 128)], fill=(70, 25, 25, 255),
@@ -251,11 +366,10 @@ class VcApp:
                 d.rectangle([(rx, 86), (W - 10, 140)], fill=BOXG,
                             outline=GRN, width=2)
                 self._t(rx + 8, 90, f'Nastawienie {r.recommended_k}', self.f_md, GRN)
-                self._t(rx + 8, 108, f'{r.rec_rpm:.0f} obr/min', self.f_lg, FG)
-                self._t(rx + 8, 122, '', self.f_sm, FG)
+                self._t(rx + 8, 108, f'{pl(r.rec_rpm, 0)} obr/min', self.f_lg, FG)
             if r.recommended_k is not None:
-                self._t(rx, 148, f'v_c = {r.rec_v:.1f} {r.vc_unit}', self.f_md, FG)
-                self._t(rx, 168, f'margines do limitu: {r.margin_pct:.1f} %',
+                self._t(rx, 148, f'v_c = {pl(r.rec_v, 1)} {r.vc_unit}', self.f_md, FG)
+                self._t(rx, 168, f'margines do limitu: {pl(r.margin_pct, 1)} %',
                         self.f_sm, GRN if r.margin_pct >= 0 else RED)
 
             # tabela nastawień
@@ -271,24 +385,36 @@ class VcApp:
                     d.rectangle([(rx - 2, ty - 1), (W - 10, ty + 14)], fill=ROWSEL)
                 flag = 'OK' if s.safe else 'NIE'
                 fcol = GRN if s.safe else RED
-                line = f'{s.k:>2}  {s.rpm:>8.0f}  {s.v:>7.1f}   '
+                v_str = f'{s.v:>7.1f}'.replace('.', ',')
+                line = f'{s.k:>2}  {s.rpm:>8.0f}  {v_str}   '
                 self._t(rx, ty, line, self.f_sm, FG if s.safe else DIM)
                 self._t(rx + 214, ty, flag, self.f_sm, fcol)
                 ty += 16
 
-        # ostrzeżenia (na czerwono, na dole)
-        wy = H - 44
-        if r and r.warnings:
-            for w in r.warnings[:2]:
-                self._t(12, wy, ('! ' + w)[:96], self.f_sm, RED)
-                wy += 14
+        # komunikaty (status PDF / ostrzeżenia) — lewy dolny obszar, ZAWIJANE (bez ucinania)
+        show_status = self._status and sdl2.SDL_GetTicks() < self._status_until
+        msgs = []
+        if show_status:
+            msgs.append((self._status, RED if self._status.startswith('Blad') else GRN))
+        elif r and r.warnings:
+            for w in r.warnings:
+                msgs.append(('! ' + w, RED))
+        wy = 330
+        for txt, col in msgs:
+            for line in self._wrap(txt, self.f_sm, 300):
+                if wy > H - 30:
+                    break
+                self._t(12, wy, line, self.f_sm, col)
+                wy += 15
+            if wy > H - 30:
+                break
 
         # stopka
         self._t(12, H - 14,
-                'D-pad ↑↓ pole  ←→ ± wartość  L/R szybki  Y krok  A/X reset  MENU wyjście',
+                'D-pad pole/±  L/R szybki  Y krok  A/X reset  R2 PDF  MENU wyjście',
                 self.f_sm, DIM)
 
-        # blit
+    def _blit(self):
         raw = self.img.tobytes()
         surf = sdl2.SDL_CreateRGBSurfaceWithFormatFrom(
             raw, W, H, 32, W * 4, sdl2.SDL_PIXELFORMAT_RGBA32)
@@ -309,68 +435,105 @@ class VcApp:
         start_ms = sdl2.SDL_GetTicks()
         GUARD_MS = 1500
 
-        while True:
-            now = sdl2.SDL_GetTicks()
-            guard = (now - start_ms) < GUARD_MS
+        # try/finally GWARANTUJE zwolnienie grabu i oddanie ekranu launcherowi
+        # (dmenu) przy KAŻDYM wyjściu — także przy wyjątku. Kluczowe: bez tego
+        # zawis apki zostawiał zgrabowany pad / czarny ekran = zamrożona konsola.
+        try:
+            while True:
+                now = sdl2.SDL_GetTicks()
+                guard = (now - start_ms) < GUARD_MS
 
-            self._pwr.poll()
-            self._pwr.tick(now)
-            if self._pwr.is_off:
-                sdl2.SDL_Delay(50)
-                # nadal drenuj event1, by MENU po przebudzeniu działał
+                if not guard:                    # POWER dopiero po okresie osłony
+                    self._pwr.poll()
+                self._pwr.tick(now)
+                if self._pwr.is_off:
+                    sdl2.SDL_Delay(50)
+                    if self._gp and select.select([self._gp.fd], [], [], 0)[0]:
+                        self._gp.read()          # drenuj, by MENU po wybudzeniu działał
+                    continue
+
+                if self.dirty:
+                    self.render()
+
+                # throttled zapis configu (max co 3 s) — mały ślad na SD
+                if self._cfg_dirty and now >= self._cfg_next_save:
+                    self._save_config()
+                    self._cfg_next_save = now + 3000
+
+                while sdl2.SDL_PollEvent(ctypes.byref(ev)):
+                    if ev.type == sdl2.SDL_QUIT and not guard:
+                        return               # finally → quit() oddaje ekran
+
                 if self._gp and select.select([self._gp.fd], [], [], 0)[0]:
-                    self._gp.read()
-                continue
+                    for e in self._gp.read():
+                        if guard:
+                            continue
+                        if e.type == EV_KEY and e.value == 1:
+                            if e.code in EXIT_KEYS:
+                                return       # MENU/MODE → finally → quit()
+                            elif e.code == BTN_Y:
+                                self._cycle_step()
+                            elif e.code == BTN_A:
+                                self._reset_field(FIELDS[self.field_idx][0])
+                                self.dirty = True; self._cfg_dirty = True
+                                self._recompute()
+                            elif e.code == BTN_X:
+                                self._load_preset(self.vals['preset'])
+                                self.dirty = True; self._cfg_dirty = True
+                                self._recompute()
+                            elif e.code == BTN_R2:
+                                self._make_report()      # R2 → raport PDF
+                            elif e.code in (BTN_L1, BTN_R1, BTN_L2):
+                                dy = 1 if e.code == BTN_R1 else -1
+                                boost = 1 if e.code in (BTN_L1, BTN_R1) else 2
+                                self._adjust(dy, step_boost=boost)
+                        elif e.type == EV_ABS:
+                            if e.code == ABS_Y and e.value != 0:
+                                self.field_idx = (self.field_idx +
+                                                  (1 if e.value > 0 else -1)) % len(FIELDS)
+                                self.dirty = True
+                            elif e.code == ABS_X and e.value != 0:
+                                self._adjust(1 if e.value > 0 else -1)
 
-            if self.dirty:
-                self.render()
-
-            while sdl2.SDL_PollEvent(ctypes.byref(ev)):
-                if ev.type == sdl2.SDL_QUIT and not guard:
-                    self.quit(); return
-
-            if self._gp and select.select([self._gp.fd], [], [], 0)[0]:
-                for e in self._gp.read():
-                    if guard:
-                        continue
-                    if e.type == EV_KEY and e.value == 1:
-                        if e.code in EXIT_KEYS:
-                            self.quit(); return
-                        elif e.code == BTN_Y:
-                            self._cycle_step()
-                        elif e.code == BTN_A:
-                            self._reset_field(FIELDS[self.field_idx][0])
-                            self.dirty = True; self._recompute()
-                        elif e.code == BTN_X:
-                            self._load_preset(self.vals['preset'])
-                            self.dirty = True; self._recompute()
-                        elif e.code in (BTN_L1, BTN_R1, BTN_L2, BTN_R2):
-                            dy = 1 if e.code in (BTN_R1, BTN_R2) else -1
-                            boost = 1 if e.code in (BTN_L1, BTN_R1) else 2
-                            self._adjust(dy, step_boost=boost)
-                    elif e.type == EV_ABS:
-                        if e.code == ABS_Y and e.value != 0:
-                            self.field_idx = (self.field_idx +
-                                              (1 if e.value > 0 else -1)) % len(FIELDS)
-                            self.dirty = True
-                        elif e.code == ABS_X and e.value != 0:
-                            self._adjust(1 if e.value > 0 else -1)
-
-            sdl2.SDL_Delay(16)
+                sdl2.SDL_Delay(16)
+        finally:
+            self.quit()
 
     def quit(self):
+        """Idempotentne sprzątanie: zapis configu, ZWOLNIENIE grabu (EVIOCGRAB 0),
+        ekran ON dla launchera, SDL_Quit. Wołane z finally pętli — zawsze."""
+        if self._quit_done:
+            return
+        self._quit_done = True
         self._log(f'=== EXIT {time.strftime("%H:%M:%S")} ===')
         try:
-            if self._gp:
-                self._gp.ungrab()
+            self._save_config()                  # utrwal ostatni stan
         except Exception:
             pass
         try:
-            self._pwr.restore()
+            if self._gp:
+                self._gp.ungrab()                # EVIOCGRAB 0 — oddaj pad dmenu
         except Exception:
             pass
-        sdl2.SDL_Quit()
+        try:
+            if self._pwr:
+                self._pwr.restore()              # fb0/blank=0 + podświetlenie + ungrab event0
+        except Exception:
+            pass
+        try:
+            sdl2.SDL_Quit()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
-    VcApp().run()
+    if '--shot' in sys.argv:
+        # Tryb QA: zapisz DOKŁADNĄ klatkę renderu (PIL) do PNG, bez SDL/fb.
+        i = sys.argv.index('--shot')
+        _path = sys.argv[i + 1] if len(sys.argv) > i + 1 else '/tmp/anbervc_shot.png'
+        _app = VcApp(headless=True)
+        _app._draw()
+        _app.img.convert('RGB').save(_path)
+        print('shot saved:', _path)
+    else:
+        VcApp().run()

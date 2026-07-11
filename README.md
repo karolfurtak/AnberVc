@@ -36,13 +36,13 @@ rpm_k = rpm_min + (k-1)·(rpm_max - rpm_min)/(N-1),   k = 1..N
 
 ### Przykład (domyślny preset — szlifierka kątowa)
 
-Tarcza D = 115 mm, v_c = 80 m/s, szlifierka 3000–12000 obr/min (7 nastawień),
+Tarcza D = 125 mm, v_c = 80 m/s, szlifierka 3000–12000 obr/min (7 nastawień),
 tarcza znamionowo 12500 obr/min:
 
 ```
-n_bezp = min( 80·60/(π·0.115),  12500,  12000 )
-       = min( 13286,  12500,  12000 ) = 12000 obr/min   (wiąże maszyna)
-→ Nastawienie 7 = 12000 obr/min,  v_c = π·23 ≈ 72.3 m/s,  margines 9.7 %
+n_bezp = min( 80·60/(π·0,125),  12500,  12000 )
+       = min( 12222,  12500,  12000 ) = 12000 obr/min   (wiąże maszyna)
+→ Nastawienie 7 = 12000 obr/min,  v_c = π·25 ≈ 78,5 m/s,  margines 1,8 %
 ```
 
 ## Możliwości
@@ -56,8 +56,14 @@ n_bezp = min( 80·60/(π·0.115),  12500,  12000 )
 - **Tabela wszystkich nastawień** z flagą bezpieczne/nie dla bieżącej średnicy
 - Ostrzeżenia na czerwono (narzędzie za duże / przekroczenie limitu)
 - Regulacja z **krokiem i szybkim krokiem** (model jak AnberPKM/AnberWM)
+- **Raport PDF do druku (A4)** przyciskiem **R2** — wspólny silnik raportów serii
+  (reportlab), zapis do `/mnt/data/anbervc_raporty/`
+- Liczby z polskim separatorem dziesiętnym (przecinek), jednostki jawne
+- **Persystencja** ostatnio użytych parametrów — `/mnt/data/anbervc_config.json`
+  (przeżywa restart; uszkodzony/brak → domyślny preset bez crasha)
 - Renderowanie SDL2 + PIL (wprost na framebufferze, bez X11)
-- POWER wygasza ekran bez zamykania apki
+- POWER wygasza ekran bez zamykania apki; **MENU/MODE zawsze** zwalnia pad
+  (EVIOCGRAB 0) i oddaje ekran launcherowi — gwarancja przez `try/finally`
 
 ## Sterowanie
 
@@ -71,6 +77,7 @@ Pełna mapa: [KEYS.md](KEYS.md).
 | **Y**                 | zmiana kroku (0.1 / 1 / 10 / 100 / 1000)     |
 | **A**                 | reset zaznaczonego pola do presetu           |
 | **X**                 | reset wszystkich pól do presetu              |
+| **R2**                | generuj raport PDF do druku (A4)             |
 | **MENU / MODE**       | wyjście                                      |
 | **POWER**             | ekran off/on (apka działa dalej)             |
 
@@ -97,7 +104,9 @@ Następnie uruchom **AnberVc** z App Center.
 **Logika oddzielona od GUI** — cały dobór obrotów siedzi w pakiecie `vc_lib/`
 (bez SDL), więc jest testowalny i uruchamialny w CI bez wyświetlacza.
 `app/main.py` to tylko warstwa SDL2 (render + input evdev), `app/power_screen.py`
-obsługuje wygaszanie ekranu (POWER).
+obsługuje wygaszanie ekranu (POWER). Raport PDF: `vc_lib/report.py` buduje treść
+(czysta, testowalna) i woła wspólny silnik serii `vc_lib/raport_engine.py`
+(reportlab) — ten sam mechanizm co AnberISA/AnberWM/AnberPKM.
 
 ## Testy / CI
 

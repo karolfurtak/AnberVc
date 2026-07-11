@@ -41,6 +41,20 @@ class ScreenPowerToggle:
     def is_off(self) -> bool:
         return self._screen_off
 
+    def ensure_on(self):
+        """Wymuś ekran ON (fb0/blank=0 + podświetlenie) — bez zwalniania grabu.
+        Wołane na starcie, by odzyskać ewentualny 'zacięty' czarny ekran po
+        poprzednim uruchomieniu ubitym w stanie wygaszonym."""
+        self._screen_off = False
+        try:
+            Path(FB_BLANK).write_text('0')
+        except Exception:
+            pass
+        try:
+            self._bl(True)
+        except Exception:
+            pass
+
     def poll(self) -> bool:
         """Sprawdź event0; jeśli POWER naciśnięty — toggle. Zwraca True gdy zmiana stanu."""
         if not self._pwr:

@@ -37,6 +37,12 @@ from dataclasses import dataclass, field
 VC_UNITS = ('m/s', 'm/min')
 
 
+def _pl(x, nd=None) -> str:
+    """Liczba z POLSKIM separatorem dziesiętnym (przecinek)."""
+    s = f'{x:g}' if nd is None else f'{x:.{nd}f}'
+    return s.replace('.', ',')
+
+
 def vc_to_ms(vc: float, unit: str) -> float:
     """Prędkość skrawania na kanoniczne m/s (1 m/s = 60 m/min)."""
     if unit == 'm/min':
@@ -59,7 +65,7 @@ DEFAULTS = {
     'tool_max_rpm':  12500,    # znamionowe max obroty narzędzia [obr/min]
     'vc':            80.0,     # limit prędkości skrawania
     'vc_unit':       'm/s',    # jednostka v_c
-    'diameter_mm':   115.0,    # średnica narzędzia [mm]
+    'diameter_mm':   125.0,    # średnica narzędzia [mm] (typowa tarcza 125)
 }
 
 
@@ -157,18 +163,18 @@ def recommend(rpm_min: float = DEFAULTS['rpm_min'],
     else:
         rec_k = rec_rpm = rec_v = margin = None
         warnings.append(
-            f'Narzędzie za duże dla tej maszyny / przekroczenie {vc:g} {vc_unit} '
+            f'Narzędzie za duże dla tej maszyny / przekroczenie {_pl(vc)} {vc_unit} '
             '— nawet nastawienie 1 jest niebezpieczne.')
 
     if rpm_max > tool_max_rpm:
         warnings.append(
-            f'Max obroty maszyny ({rpm_max:g}) przekraczają znamionowe narzędzia '
-            f'({tool_max_rpm:g}) — nie ustawiaj wyżej niż nastawienie bezpieczne.')
+            f'Max obroty maszyny ({_pl(rpm_max)}) przekraczają znamionowe narzędzia '
+            f'({_pl(tool_max_rpm)}) — nie ustawiaj wyżej niż nastawienie bezpieczne.')
 
     top = settings[-1]
     if top.v_ms > vc_ms + 1e-9:
         warnings.append(
-            f'Najwyższe nastawienie daje v_c={top.v:.1f} {vc_unit} > {vc:g} '
+            f'Najwyższe nastawienie daje v_c={_pl(top.v, 1)} {vc_unit} > {_pl(vc)} '
             f'{vc_unit} — NIE używaj pełnych obrotów przy tej średnicy.')
 
     return Recommendation(
@@ -187,27 +193,27 @@ BINDING_PL = {
 # Każdy preset nadpisuje część parametrów; brakujące pola brane z DEFAULTS.
 PRESETS = [
     {
-        'name': 'Szlifowanie — tarcza 115 (domyślny)',
+        'name': 'Szlifowanie tarcza 125',
         'rpm_min': 3000, 'rpm_max': 12000, 'n_settings': 7,
-        'tool_max_rpm': 12500, 'vc': 80.0, 'vc_unit': 'm/s', 'diameter_mm': 115.0,
+        'tool_max_rpm': 12500, 'vc': 80.0, 'vc_unit': 'm/s', 'diameter_mm': 125.0,
     },
     {
-        'name': 'Wiercenie — stal, wiertło HSS',
+        'name': 'Wiercenie stal HSS',
         'rpm_min': 500, 'rpm_max': 3000, 'n_settings': 5,
         'tool_max_rpm': 100000, 'vc': 25.0, 'vc_unit': 'm/min', 'diameter_mm': 10.0,
     },
     {
-        'name': 'Wiercenie — aluminium, wiertło HSS',
+        'name': 'Wiercenie Al HSS',
         'rpm_min': 500, 'rpm_max': 3000, 'n_settings': 5,
         'tool_max_rpm': 100000, 'vc': 120.0, 'vc_unit': 'm/min', 'diameter_mm': 10.0,
     },
     {
-        'name': 'Frezowanie — aluminium, frez HSS',
+        'name': 'Frezowanie Al HSS',
         'rpm_min': 1000, 'rpm_max': 10000, 'n_settings': 6,
         'tool_max_rpm': 100000, 'vc': 150.0, 'vc_unit': 'm/min', 'diameter_mm': 8.0,
     },
     {
-        'name': 'Frezowanie — stal, frez HSS',
+        'name': 'Frezowanie stal HSS',
         'rpm_min': 1000, 'rpm_max': 10000, 'n_settings': 6,
         'tool_max_rpm': 100000, 'vc': 25.0, 'vc_unit': 'm/min', 'diameter_mm': 8.0,
     },
@@ -232,12 +238,12 @@ def _selftest() -> int:
         print(f'[{"OK " if cond else "FAIL"}] {name}')
         ok = ok and cond
 
-    r = recommend()   # domyślne: szlifierka, D=115, v_c=80 m/s
+    r = recommend()   # domyślne: szlifierka, D=125, v_c=80 m/s
     check('n_safe=12000 (wiąże maszyna)',
           abs(r.n_safe - 12000) < 1e-6 and r.binding == 'machine')
     check('rekomendacja = nastawienie 7', r.recommended_k == 7)
     check('rpm rekomendowane = 12000', abs(r.rec_rpm - 12000) < 1e-6)
-    check('v_c ~ 72,3 m/s', abs(r.rec_v - 72.257) < 0.05)
+    check('v_c ~ 78,5 m/s', abs(r.rec_v - math.pi * 25) < 0.05)
     check('brak przekroczeń', r.recommended_k is not None)
     print(f'  [szlif] n_safe={r.n_safe:.1f}  k={r.recommended_k}  '
           f'v_c={r.rec_v:.1f} {r.vc_unit}  margines={r.margin_pct:.1f}%')

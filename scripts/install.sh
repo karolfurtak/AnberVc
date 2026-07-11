@@ -30,6 +30,8 @@ fi
 python3 -c "import sdl2" 2>/dev/null || echo "UWAGA: brak pysdl2 — pip install pysdl2"
 python3 -c "import PIL"  2>/dev/null || echo "UWAGA: brak Pillow — pip install Pillow"
 python3 -c "import evdev" 2>/dev/null || echo "UWAGA: brak evdev — pip install evdev"
+python3 -c "import reportlab" 2>/dev/null || echo "UWAGA: brak reportlab (raport PDF) — pip install reportlab"
+python3 -c "import matplotlib" 2>/dev/null || echo "UWAGA: brak matplotlib (raport PDF) — pip install matplotlib"
 
 # 4. Self-test logiki (bez SDL)
 echo "--- self-test ---"

@@ -64,19 +64,19 @@ def test_setting_rpm_out_of_range():
         vc.setting_rpm(8, 3000, 12000, 7)
 
 
-# ── GŁÓWNY przypadek: szlifierka D=115 (z zadania) ───────────────────────────
-def test_default_grinder_D115():
-    r = vc.recommend()   # domyślne = preset szlifierki
-    # n_bezp = min(13285, 12500, 12000) = 12000, wiąże maszyna
+# ── GŁÓWNY przypadek: szlifierka D=125 (domyślny preset) ─────────────────────
+def test_default_grinder_D125():
+    r = vc.recommend()   # domyślne = preset szlifierki, D=125
+    # n_bezp = min(12222, 12500, 12000) = 12000, wiąże maszyna
     assert math.isclose(r.n_safe, 12000, rel_tol=1e-9)
     assert r.binding == 'machine'
     assert r.recommended_k == 7
     assert math.isclose(r.rec_rpm, 12000, rel_tol=1e-9)
-    # v = π·23 ≈ 72.257 m/s
-    assert math.isclose(r.rec_v, math.pi * 23, rel_tol=1e-6)
+    # v = π·0.125·12000/60 = π·25 ≈ 78.54 m/s
+    assert math.isclose(r.rec_v, math.pi * 25, rel_tol=1e-6)
     assert r.vc_unit == 'm/s'
-    # margines do 80 m/s: (80-72.257)/80 ≈ 9.68 %
-    assert math.isclose(r.margin_pct, (80 - math.pi * 23) / 80 * 100, rel_tol=1e-6)
+    # margines do 80 m/s: (80-78.54)/80 ≈ 1.83 %
+    assert math.isclose(r.margin_pct, (80 - math.pi * 25) / 80 * 100, rel_tol=1e-6)
     # brak ostrzeżeń krytycznych (rekomendacja istnieje)
     assert r.recommended_k is not None
     # wszystkie 7 nastawień bezpieczne (n_safe=12000=rpm_7)
@@ -221,7 +221,7 @@ def test_defaults_constants():
     assert core.DEFAULTS['tool_max_rpm'] == 12500
     assert core.DEFAULTS['vc'] == 80.0
     assert core.DEFAULTS['vc_unit'] == 'm/s'
-    assert core.DEFAULTS['diameter_mm'] == 115.0
+    assert core.DEFAULTS['diameter_mm'] == 125.0
 
 
 def test_invalid_unit_raises():
