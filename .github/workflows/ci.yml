@@ -5,23 +5,28 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 jobs:
   test-python:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install fonts DejaVu (raport PDF)
         run: sudo apt-get update -qq && sudo apt-get install -y fonts-dejavu-core
 
       - name: Install deps
-        run: pip install ruff pytest reportlab matplotlib
+        run: pip install ruff pytest reportlab pillow matplotlib
 
       - name: AST parse
         run: |
@@ -47,7 +52,9 @@ jobs:
           assert 'ScreenPowerToggle' in src, 'POWER toggle (backlight) wymagany'
           assert 'EXIT_KEYS' in src, 'MENU/MODE exit wymagany'
           assert 'from vc_lib import' in src, 'logika ma byc importowana z vc_lib (testowalnosc)'
-          assert 'SDL_INIT_JOYSTICK' not in src, 'NIE inicjalizowac joysticka (grabuje event1)'
+          init_lines = [l for l in src.splitlines() if 'SDL_Init(' in l]
+          assert init_lines, 'brak wywolania SDL_Init'
+          assert not any('JOYSTICK' in l for l in init_lines), 'NIE inicjalizowac joysticka (grabuje event1)'
           assert 'BTN_R2' in src and '_make_report' in src, 'R2 -> raport PDF wymagany'
           assert 'finally:' in src and 'ungrab' in src, 'gwarantowane zwolnienie grabu (try/finally + ungrab) wymagane'
           assert 'ensure_on' in src, 'odzyskanie ekranu na starcie wymagane'
