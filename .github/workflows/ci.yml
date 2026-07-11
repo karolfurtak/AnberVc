@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install deps
+        run: pip install ruff pytest
+
+      - name: AST parse
+        run: |
+          python -c "import ast; ast.parse(open('app/main.py', encoding='utf-8').read()); print('main.py syntax OK')"
+          python -c "import ast; ast.parse(open('vc_lib/core.py', encoding='utf-8').read()); print('core.py syntax OK')"
+
+      - name: Ruff lint (tylko realne bugi)
+        run: ruff check vc_lib/ tests/ --select=E9,F --ignore=F401,F541,F841
+
+      - name: Self-test logiki (bez SDL)
+        run: python vc_lib/core.py
+
+      - name: Pytest (dobór obrotów — pełna klasa + brzegi)
+        run: pytest -q tests/
+
+      - name: Walidacja struktury GUI (mock — bez uruchamiania SDL)
+        run: |
+          python -c "
+          src = open('app/main.py', encoding='utf-8').read()
+          assert 'class VcApp' in src, 'klasa VcApp wymagana'
+          assert 'def render' in src and 'def run' in src, 'metody render/run wymagane'
+          assert 'ScreenPowerToggle' in src, 'POWER toggle (backlight) wymagany'
+          assert 'EXIT_KEYS' in src, 'MENU/MODE exit wymagany'
+          assert 'from vc_lib import' in src, 'logika ma byc importowana z vc_lib (testowalnosc)'
+          assert 'SDL_INIT_JOYSTICK' not in src, 'NIE inicjalizowac joysticka (grabuje event1)'
+          print('struct OK')
+          "
+
+  lint-bash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -S error app/AnberVc.sh scripts/install.sh
