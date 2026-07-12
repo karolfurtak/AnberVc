@@ -49,17 +49,17 @@ from power_screen import ScreenPowerToggle      # noqa: E402
 W, H = 640, 480
 FONT_PATH = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'
 
-BG   = (10, 14, 20, 255)
-FG   = (210, 220, 230, 255)
-ACC  = (90, 190, 255, 255)
-GRN  = (95, 225, 125, 255)
-YEL  = (255, 205, 70, 255)
-RED  = (240, 95, 95, 255)
-DIM  = (120, 132, 148, 255)
-SEP  = (40, 50, 65, 255)
+BG   = (14, 22, 18, 255)         # kanon AnberWM main.py L32-34
+FG   = (210, 220, 230, 255)      # kanon AnberWM main.py L32-34
+ACC  = (150, 220, 140, 255)      # kanon AnberWM main.py L32-34
+GRN  = (100, 220, 130, 255)      # kanon AnberWM main.py L32-34
+YEL  = (240, 220, 100, 255)      # kanon AnberWM main.py L32-34
+RED  = (240, 100, 100, 255)      # kanon AnberWM main.py L32-34
+DIM  = (130, 140, 155, 255)      # kanon AnberWM main.py L32-34
+SEP  = (40, 55, 50, 255)         # kanon AnberWM main.py L32-34
 SEL  = (255, 210, 90, 255)       # zaznaczenie pola + tekst statusu (kanon REALNEGO AnberWM)
 BOXG = (30, 70, 45, 255)
-ROWSEL = (35, 55, 80, 255)
+ROWSEL = (35, 60, 48, 255)       # ciemna zieleń (podświetlenie wiersza) — spójne z paletą WM
 WM_BAR = (38, 58, 44, 255)       # ciemnozielony pasek tła pod komunikatem statusu (kanon AnberWM)
 
 # evdev — REALNE kody TEGO egzemplarza (RG40XX V), ustalenie ze sprzętu
@@ -275,6 +275,9 @@ class VcApp:
             self.dirty = True
             return
         self._status = 'Generuję raport (chwila)...'
+        self._status_until = sdl2.SDL_GetTicks() + 5000  # PRZED renderem — inaczej wymuszony
+                                                    # render poniżej widzi starą/zerową wartość
+                                                    # i _draw() natychmiast czyści status
         self.dirty = True
         self.render()                              # WYMUŚ render PRZED blokującym generowaniem
         try:

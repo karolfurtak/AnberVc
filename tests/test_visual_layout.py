@@ -404,6 +404,55 @@ def test_status_text_drawn_at_bottom_left_in_sel_color(app_main, app):
             f'brak tekstu statusu w kolorze SEL przy dolnej krawędzi dla: {text!r}')
 
 
+def test_make_report_generating_status_survives_forced_render(app_main, app, monkeypatch):
+    """Regresja Poprawki 1: `_make_report()` ustawia self._status='Generuję
+    raport (chwila)...' i WYMUSZA render() PRZED (blokującym) generowaniem
+    PDF. Jeśli `_status_until` nie jest zaktualizowany RAZEM z `_status`
+    (czyli zostaje przy starej/zerowej wartości sprzed wywołania — dokładnie
+    stan świeżo utworzonej apki), `_draw()` widzi
+    `sdl2.SDL_GetTicks() > self._status_until` jako PRAWDZIWE i czyści status
+    ZANIM pasek zdąży się narysować — user nigdy nie widzi „Generuję”. Ten
+    test woła PRAWDZIWY `_make_report()` (z zamockowanym `generate_pdf`),
+    przechwytuje klatkę DOKŁADNIE w momencie wymuszonego render() (przed
+    generowaniem PDF) i sprawdza, że pasek WM_BAR + tekst SEL faktycznie są
+    narysowane w tej klatce. Na kodzie SPRZED poprawki (status_until
+    ustawiany dopiero PO generate_pdf) ten test FAILuje, bo w chwili
+    wymuszonego render() self._status_until wciąż ma wartość sprzed
+    wywołania (0 — stan świeżej apki), więc pasek/tekst nie są rysowane."""
+    app._status_until = 0             # stan sprzed wywołania (świeża apka / stary bug)
+
+    import vc_lib.report as report_mod
+    monkeypatch.setattr(report_mod, 'generate_pdf',
+                         lambda params, rec, operacja: '/tmp/anbervc_test.pdf')
+
+    captured = {}
+
+    def _fake_render():
+        # dokładnie to, co realny render() robi: narysuj klatkę i pokaż ją —
+        # tu przechwytujemy klatkę W TYM MOMENCIE (wymuszony render PRZED PDF).
+        app._draw()
+        captured['status'] = app._status
+        captured['img'] = app.img.copy()
+
+    monkeypatch.setattr(app, 'render', _fake_render)
+    app._make_report()
+
+    assert 'img' in captured, 'render() nie zostało wywołane PRZED generowaniem PDF'
+    assert captured['status'] == 'Generuję raport (chwila)...', (
+        f'self._status w chwili wymuszonego render() to {captured["status"]!r}, '
+        f"oczekiwano 'Generuję raport (chwila)...'")
+
+    img = captured['img']
+    wm_bar = app_main.WM_BAR[:3]
+    sel = app_main.SEL[:3]
+    assert _has_full_width_run(img, H - 40, H - 24, wm_bar), (
+        'pasek WM_BAR nie został narysowany podczas wymuszonego render() w '
+        '_make_report() — komunikat "Generuję" znika przed pokazaniem (regresja Poprawki 1)')
+    assert _has_pixel(img, sel, range(H - 44, H - 24), x_range=(4, 300)), (
+        'tekst statusu SEL nie został narysowany podczas wymuszonego render() w '
+        '_make_report() — komunikat "Generuję" znika przed pokazaniem (regresja Poprawki 1)')
+
+
 def test_no_status_bar_or_text_when_status_expired(app_main, app):
     """Po wygaśnięciu timeoutu (status_until w przeszłości) komunikat NIE jest
     już rysowany — ani tekst, ani pasek tła — i self._status jest aktywnie
