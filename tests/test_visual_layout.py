@@ -3,31 +3,30 @@
 inspekcja PIKSELI wyrenderowanego obrazu.
 
 Klasa regresji, którą te testy pilnują: „test przechodzi, apka na ekranie
-wygląda zepsuta". Sam fakt, że _clip()/_wrap() ISTNIEJĄ i są wołane nie
-gwarantuje, że naprawdę mieszczą tekst w 640×480 ani że pasek statusu
-faktycznie wygląda jak pomarańczowy/czerwony prostokąt z tekstem — to
-mierzymy tutaj wprost, metryką fontu PIL (ta sama, której używa _draw())
+wygląda zepsuta". Sam fakt, że _clip()/_wrap()/_fit_status() ISTNIEJĄ i są
+wołane nie gwarantuje, że naprawdę mieszczą tekst w 640×480 ani że komunikat
+raportu faktycznie wygląda jak zwykły tekst (styl AnberWM) bez paska/tła —
+to mierzymy tutaj wprost, metryką fontu PIL (ta sama, której używa _draw())
 oraz odczytem pikseli z wyrenderowanej klatki.
 
 Dwie klasy assercji:
   (a) SZEROKOŚĆ: najdłuższe realne treści (etykiety pól, wartości graniczne,
       stopka, etykiety wiązania, komunikaty statusu, ostrzeżenia) — po
-      przejściu przez _clip()/_wrap() — MUSZĄ mieścić się w dostępnej
-      szerokości KOLUMNY (nie tylko „w 640px w ogóle"), parametrycznie po
+      przejściu przez _clip()/_wrap()/_fit_status() — MUSZĄ mieścić się w
+      dostępnej szerokości (kolumny albo całego ekranu), parametrycznie po
       WSZYSTKICH polach/komunikatach, nie próbce.
-  (b) WYGLĄD paska statusu: po realnym _draw() na wyrenderowanej klatce musi
-      być widoczny POMARAŃCZOWY prostokąt tła (Generuję/Zapisano) lub
-      CZERWONY (błąd) we właściwym miejscu (y≈330, pełna szerokość), Z
-      tekstem narysowanym NA nim (kolor tekstu paska wykryty w jego
-      obszarze) — nie goły tekst na ciemnym tle strony.
+  (b) WYGLĄD komunikatu statusu: po realnym _draw() na wyrenderowanej klatce
+      tekst statusu musi być widoczny przy dolnej krawędzi (x=8, y≈H-38) w
+      kolorze SEL, BEZ żadnego pełnoszerokościowego prostokąta tła (dawny
+      pomarańczowy/czerwony pasek — USUNIĘTY na rzecz kanonu AnberWM).
 
 app/main.py importuje `sdl2` bezwarunkowo i ładuje font z absolutnej ścieżki
 konsoli (/usr/share/fonts/.../DejaVuSansMono.ttf) — obu może brakować na PC
 dev. Poniżej: minimalny fake `sdl2` (jedyne użycie w trybie headless to
 SDL_GetTicks()) + podmiana FONT_PATH na dostępny lokalnie monospace font PO
 imporcie modułu (ta sama nazwa globalna, którą _draw() odczytuje w locie) —
-logika layoutu (_clip/_wrap/_status_bar) jest identyczna z konsolową,
-różni się tylko plik fontu użyty do pomiaru pikseli.
+logika layoutu (_clip/_wrap/_fit_status) jest identyczna z konsolową, różni
+się tylko plik fontu użyty do pomiaru pikseli.
 """
 import importlib.util
 import os
@@ -99,7 +98,7 @@ def app(app_main):
 
 
 # ── budżety pikselowe wyciągnięte Z ŹRÓDŁA (nie przepisane ręcznie) ───────────
-# Niezależność od dryfu: jeśli ktoś zmieni layout w _draw()/_status_bar() bez
+# Niezależność od dryfu: jeśli ktoś zmieni layout w _draw()/_fit_status() bez
 # aktualizacji tego testu, liczby i tak są brane z main.py — test i tak
 # wykryje realną regresję (bo mierzy PRAWDZIWE piksele wyrenderowanej treści
 # względem TYCH SAMYCH liczb, które realnie sterują rysowaniem).
@@ -114,9 +113,7 @@ BUDGET_VAL = _int_after(r"_clip\(f'\{val_str\}\{unit_str\}', self\.f_md, (\d+)\)
 BUDGET_WARN = _int_after(r"_wrap\('! ' \+ w, self\.f_sm, (\d+)\)")
 RX = _int_after(r"\n\s*rx = (\d+)\n")
 BUDGET_BINDING = W - RX - 8   # matches literal `W - rx - 8` passed to _clip in _draw()
-STATBAR_X0 = _int_after(r"x0, x1 = (\d+), W - 10")
-STATBAR_PAD = _int_after(r"\n\s*pad = (\d+)\n")
-BUDGET_STATBAR = (W - STATBAR_X0) - STATBAR_X0 - 2 * STATBAR_PAD
+BUDGET_STATUS = W - 16        # matches literal `W - 16` passed to _fit_status() in _make_report
 
 FOOTER_TEXT = re.search(
     r"self\._t\(12, H - 14,\s*\n\s*'([^']+)'", _SRC).group(1)
@@ -230,40 +227,63 @@ def test_warning_lines_fit_after_wrap(app, warning_text):
 
 
 # ── komunikaty statusu STAŁE (literały bez dynamicznej treści — bezpiecznie
-#    testowalne wprost) ────────────────────────────────────────────────────
+#    testowalne wprost). Komunikat to JEDNA linia tekstu (styl AnberWM, bez
+#    zawijania/paska) — musi mieścić się w CAŁOŚCI na szerokości ekranu. ───────
 _FIXED_STATUS_MESSAGES = [
-    'Generuję PDF...',
+    'Generuję raport (chwila)...',
     'Brak wyniku obliczeń — popraw parametry (PDF pominięty).',
 ]
 
 
 @pytest.mark.parametrize('status_text', _FIXED_STATUS_MESSAGES)
-def test_status_bar_lines_fit_after_wrap(app, status_text):
-    """Każda linia paska statusu (po zawinięciu, jak w _status_bar) mieści się
-    w interiorze paska."""
-    lines = app._wrap(status_text, app.f_sm, BUDGET_STATBAR)
-    for line in lines:
-        w = app.draw.textlength(line, font=app.f_sm)
-        assert w <= BUDGET_STATBAR, (
-            f'linia paska {w:.0f}px > budżet {BUDGET_STATBAR}px: {line!r}')
-    # pasek też musi zmieścić się PIONOWO nad stopką (y=330 start, stopka H-14)
-    line_h = 15
-    pad = STATBAR_PAD
-    total_h = 2 * pad + len(lines) * line_h
-    assert 330 + total_h <= H - 20, (
-        f'pasek statusu ({len(lines)} linii, {total_h}px) wchodzi na stopkę: '
-        f'{status_text!r}')
+def test_fixed_status_messages_fit_screen_width(app, status_text):
+    """Każdy stały komunikat statusu (jedna linia, x=8..W-8) mieści się w
+    całości na ekranie bez zawijania/przycinania."""
+    w = app.draw.textlength(status_text, font=app.f_sm)
+    assert w <= BUDGET_STATUS, (
+        f'status {w:.0f}px > budżet {BUDGET_STATUS}px: {status_text!r}')
 
 
-# ── komunikaty statusu DYNAMICZNE ('Zapisano...'/'Błąd PDF: ...') — oracle
+def test_status_texts_match_wm_pattern():
+    """Dosłowne teksty statusu (wzór AnberWM, dostosowany do AnberVc) muszą
+    być obecne w źródle main.py — regresja treści komunikatu."""
+    assert "self._status = 'Generuję raport (chwila)...'" in _SRC
+    assert "'✔ Zapisano: '" in _SRC
+    assert "✘ Błąd: " in _SRC
+    assert 'str(e)[:42]' in _SRC
+
+
+def test_status_timeout_unified_to_5000ms():
+    """Auto-znikanie statusu ujednolicone na 5000 ms (usunięty stary wariant
+    6000 ms) — wszystkie przypisania _status_until używają tej samej wartości."""
+    assert '6000' not in _SRC, 'stary wariant timeoutu 6000ms powinien zniknąć'
+    matches = re.findall(r'_status_until\s*=\s*sdl2\.SDL_GetTicks\(\)\s*\+\s*(\d+)', _SRC)
+    assert matches, 'brak przypisań _status_until w main.py'
+    assert set(matches) == {'5000'}, f'timeouty statusu niespójne: {set(matches)}'
+
+
+def test_status_bar_method_and_constants_removed(app_main):
+    """Stary pomarańczowy pasek statusu (_status_bar + ORANGE/ORANGE_TX/
+    STATBAR_RED) MUSI zniknąć — kanon AnberWM to zwykły tekst, bez paska."""
+    assert not hasattr(app_main.VcApp, '_status_bar'), '_status_bar powinna być usunięta'
+    for name in ('ORANGE', 'ORANGE_TX', 'STATBAR_RED'):
+        assert not hasattr(app_main, name), f'{name} powinien być usunięty (stary pasek statusu)'
+
+
+def test_sel_color_matches_wm_canon(app_main):
+    assert app_main.SEL == (255, 230, 90, 255)
+
+
+# ── komunikaty statusu DYNAMICZNE ('✔ Zapisano: ...'/'✘ Błąd: ...') — oracle
 #    NIEZALEŻNY od zgadywania treści: wołamy PRAWDZIWY _make_report() z
 #    zamockowanym generate_pdf (zwraca realistyczną DŁUGĄ ścieżkę konsoli /
 #    podnosi wyjątek z długim komunikatem), i mierzymy STATUS, JAKI APKA
-#    NAPRAWDĘ USTAWIA — to właśnie złapało (red→green) regresję
-#    'Zapisano PDF: {pełna_ścieżka}' uciekającą poza 640×480. ───────────────
+#    NAPRAWDĘ USTAWIA — to właśnie łapie regresję długiej nazwy pliku
+#    uciekającej poza 640×480. ─────────────────────────────────────────────
 _LONG_REALISTIC_PATH = (
     '/mnt/data/sprawozdania/raporty/AnberVc/'
-    'AnberVc_Szlifowanie_tarcza_125_D125_v80_2026-07-12_23-59-59.pdf')
+    'anbervc_szlifowanie_tarcza_125_D125mm_vc80ms_3000-12000rpm_N7_tn12500_'
+    '20260712_235959.pdf')
 
 
 def _run_make_report(app, monkeypatch, *, raise_exc=None, return_path=None):
@@ -276,7 +296,7 @@ def _run_make_report(app, monkeypatch, *, raise_exc=None, return_path=None):
 
     monkeypatch.setattr(report_mod, 'generate_pdf', _fake_generate_pdf)
     # _make_report() woła self.render() (_draw + SDL _blit) w trakcie „Generuję
-    # PDF…” — w headless nie ma prawdziwego SDL (fake sdl2 ma tylko
+    # raport…” — w headless nie ma prawdziwego SDL (fake sdl2 ma tylko
     # SDL_GetTicks), więc podmieniamy render() na sam _draw() (bez blitu do
     # okna) — identyczny wzorzec jak reszta tego pliku testowego.
     monkeypatch.setattr(app, 'render', app._draw)
@@ -284,75 +304,63 @@ def _run_make_report(app, monkeypatch, *, raise_exc=None, return_path=None):
     return app._status
 
 
-def _assert_status_fits_and_bar(app, app_main, status_text, *, is_err):
-    # (a) szerokość: REALNY tekst po zawinięciu jak w _status_bar
-    lines = app._wrap(status_text, app.f_sm, BUDGET_STATBAR)
-    for line in lines:
-        w = app.draw.textlength(line, font=app.f_sm)
-        assert w <= BUDGET_STATBAR, (
-            f'REALNY status apki {w:.0f}px > budżet {BUDGET_STATBAR}px: {line!r} '
-            f'(pełny status: {status_text!r})')
-    line_h = 15
-    total_h = 2 * STATBAR_PAD + len(lines) * line_h
-    assert 330 + total_h <= H - 20, (
-        f'REALNY pasek statusu ({len(lines)} linii) wchodzi na stopkę: {status_text!r}')
-
-    # (b) wygląd: render pełnej klatki z tym STANEM (nie z podstawionym tekstem)
-    app._draw()
-    bar_color = (app_main.STATBAR_RED if is_err else app_main.ORANGE)[:3]
-    text_color = (app_main.FG if is_err else app_main.ORANGE_TX)[:3]
-    rows = _bg_rows(app.img, bar_color)
-    assert rows, f'brak prostokąta tła {bar_color} dla realnego statusu: {status_text!r}'
-    assert abs(min(rows) - 330) <= 3
-    band = range(min(rows), min(rows) + 60)
-    assert _has_pixel(app.img, text_color, band), (
-        f'brak tekstu na pasku dla realnego statusu: {status_text!r}')
-
-
-def test_real_make_report_success_status_fits_and_looks_right(app, app_main, monkeypatch):
+def test_real_make_report_success_status_fits_and_is_prefixed(app, app_main, monkeypatch):
     """R2 z sukcesem, konsolowa DŁUGA ścieżka zwrócona przez generate_pdf —
-    _make_report() musi wystawić KRÓTKI self._status (pełna ścieżka tylko do
-    logu), który mieści się na pasku i renderuje się jako pomarańczowy pasek."""
+    _make_report() musi wystawić self._status zaczynający się od '✔ Zapisano: ',
+    BEZ pełnej ścieżki (tylko w logu), zmierzalnie mieszczący się w całości na
+    ekranie PO ewentualnym skróceniu nazwy wielokropkiem (_fit_status)."""
     status = _run_make_report(app, monkeypatch, return_path=_LONG_REALISTIC_PATH)
+    assert status.startswith('✔ Zapisano: ')
     assert _LONG_REALISTIC_PATH not in status, (
         f'pełna ścieżka pliku wyciekła do self._status (poza log): {status!r}')
-    _assert_status_fits_and_bar(app, app_main, status, is_err=False)
+    w = app.draw.textlength(status, font=app.f_sm)
+    assert w <= BUDGET_STATUS, (
+        f'REALNY status po skróceniu {w:.0f}px > budżet {BUDGET_STATUS}px: {status!r}')
 
 
-def test_real_make_report_error_status_fits_and_looks_right(app, app_main, monkeypatch):
+def test_real_make_report_error_status_fits_and_is_prefixed(app, app_main, monkeypatch):
     """R2 z wyjątkiem o DŁUGIM komunikacie (typowy PermissionError z pełną
-    ścieżką) — realny self._status ustawiony przez _make_report() musi się
-    zmieścić na pasku (zawinięty znak-po-znaku w razie potrzeby) i renderować
-    się jako czerwony pasek błędu."""
+    ścieżką) — realny self._status musi zaczynać się od '✘ Błąd: ', być
+    ucięty do 42 znaków komunikatu wyjątku, i mieścić się na ekranie."""
     exc = PermissionError(f"[Errno 13] Permission denied: '{_LONG_REALISTIC_PATH}'")
     status = _run_make_report(app, monkeypatch, raise_exc=exc)
-    assert status.startswith('Błąd PDF:')
-    _assert_status_fits_and_bar(app, app_main, status, is_err=True)
+    assert status.startswith('✘ Błąd: ')
+    w = app.draw.textlength(status, font=app.f_sm)
+    assert w <= BUDGET_STATUS, (
+        f'REALNY status błędu {w:.0f}px > budżet {BUDGET_STATUS}px: {status!r}')
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# (b) WYGLĄD — render pełnej klatki, inspekcja pikseli: pasek statusu MUSI
-#     być kolorowym prostokątem tła + tekst NA nim, we właściwym miejscu.
+# (b) WYGLĄD — render pełnej klatki, inspekcja pikseli: komunikat statusu to
+#     ZWYKŁY tekst (kolor SEL) przy dolnej krawędzi, BEZ prostokąta tła.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _bg_rows(img, bg_rgb, y_from=300, min_run=400):
-    """Wiersze zawierające ciągły poziomy pas koloru bg_rgb (min_run px) —
-    identyfikuje realny obszar tła prostokąta paska w wyrenderowanej klatce
-    (niezależnie od dokładnej matematyki wewnątrz _status_bar)."""
+def _any_solid_bar_row(img, y_from, y_to, bg_rgb, min_run=400):
+    """True, jeśli w zakresie wierszy [y_from, y_to) istnieje CIĄGŁY poziomy
+    pas (≥min_run px) JEDNEGO koloru różnego od tła strony — odcisk dawnego
+    prostokąta paska statusu. Zwykły tekst (wąskie glify) nigdy nie tworzy
+    tak długiego jednolitego biegu, więc to bezpiecznie odróżnia „pasek" od
+    „tekstu na tle"."""
     px = img.load()
-    w, h = img.size
-    rows = []
-    for y in range(y_from, h):
+    w = img.size[0]
+    for y in range(y_from, y_to):
         run = maxrun = 0
-        for x in range(0, w):
-            if px[x, y][:3] == bg_rgb:
-                run += 1
-                maxrun = max(maxrun, run)
-            else:
+        prev = None
+        for x in range(w):
+            c = px[x, y][:3]
+            if c == bg_rgb:
                 run = 0
+                prev = None
+                continue
+            if c == prev:
+                run += 1
+            else:
+                run = 1
+                prev = c
+            maxrun = max(maxrun, run)
         if maxrun >= min_run:
-            rows.append(y)
-    return rows
+            return True
+    return False
 
 
 def _has_pixel(img, rgb, y_range, x_range=(10, 630)):
@@ -371,62 +379,36 @@ def _render_with_status(app_main, app, status_text):
     return app.img
 
 
-def test_generating_status_is_orange_bar_with_text(app_main, app):
-    """'Generuję PDF...' → prostokąt tła POMARAŃCZOWY (ORANGE) zaczynający się
-    ~y=330, pełna szerokość ekranu, Z tekstem (kolor ORANGE_TX) narysowanym
-    na nim — nie goły żółty/pomarańczowy tekst na ciemnym tle strony."""
-    img = _render_with_status(app_main, app, 'Generuję PDF...')
-    orange = app_main.ORANGE[:3]
-    orange_tx = app_main.ORANGE_TX[:3]
-
-    rows = _bg_rows(img, orange)
-    assert rows, 'brak pomarańczowego prostokąta tła w wyrenderowanej klatce'
-    assert abs(min(rows) - 330) <= 3, (
-        f'pasek zaczyna się w y={min(rows)}, oczekiwano ~330 (właściwe miejsce)')
-
-    band = range(min(rows), min(rows) + 60)
-    assert _has_pixel(img, orange_tx, band), (
-        'brak tekstu (kolor ORANGE_TX) NA pomarańczowym pasku — sam prostokąt tła to za mało')
+def test_status_message_has_no_background_bar(app_main, app):
+    """Komunikat statusu (styl AnberWM) to zwykły tekst na tle strony — NIE ma
+    już pełnoszerokościowego prostokąta tła (dawny pomarańczowy/czerwony pasek)
+    w obszarze, gdzie kiedyś się rysował (y≈300..H-10)."""
+    img = _render_with_status(app_main, app, 'Generuję raport (chwila)...')
+    bg = app_main.BG[:3]
+    assert not _any_solid_bar_row(img, 300, H - 10, bg), (
+        'wykryto pełnoszerokościowy prostokąt tła w obszarze statusu — '
+        'oczekiwano zwykłego tekstu bez paska (styl AnberWM)')
 
 
-def test_saved_status_is_orange_bar_with_text(app_main, app):
-    """'Zapisano raport PDF ✓' — ten sam motyw paska co 'Generuję…' (spójny
-    wygląd obu stanów pośrednich)."""
-    img = _render_with_status(app_main, app, 'Zapisano raport PDF ✓')
-    orange = app_main.ORANGE[:3]
-    orange_tx = app_main.ORANGE_TX[:3]
-
-    rows = _bg_rows(img, orange)
-    assert rows, 'brak pomarańczowego prostokąta tła dla komunikatu „Zapisano”'
-    band = range(min(rows), min(rows) + 60)
-    assert _has_pixel(img, orange_tx, band), 'brak tekstu na pasku „Zapisano”'
+def test_status_text_drawn_at_bottom_left_in_sel_color(app_main, app):
+    """Tekst statusu narysowany blisko x=8, y=H-38, kolorem SEL (żółty,
+    kanon AnberWM) — niezależnie od stanu (generowanie/sukces/błąd)."""
+    sel = app_main.SEL[:3]
+    for text in ('Generuję raport (chwila)...', '✔ Zapisano: raport.pdf',
+                 '✘ Błąd: dysk pełny'):
+        img = _render_with_status(app_main, app, text)
+        assert _has_pixel(img, sel, range(H - 44, H - 24), x_range=(4, 300)), (
+            f'brak tekstu statusu w kolorze SEL przy dolnej krawędzi dla: {text!r}')
 
 
-def test_error_status_is_red_bar_with_text(app_main, app):
-    """Błąd (prefiks 'Błąd'/'Brak') → ten sam mechanizm paska, ale kolor
-    STATBAR_RED zamiast ORANGE — spójny styl, odróżnialny kolor."""
-    img = _render_with_status(app_main, app, 'Błąd PDF: dysk pełny')
-    red = app_main.STATBAR_RED[:3]
-    fg = app_main.FG[:3]
-    orange = app_main.ORANGE[:3]
-
-    rows = _bg_rows(img, red)
-    assert rows, 'brak czerwonego prostokąta tła dla komunikatu błędu'
-    assert abs(min(rows) - 330) <= 3
-    assert not _bg_rows(img, orange), 'błąd NIE powinien renderować się pomarańczowo'
-
-    band = range(min(rows), min(rows) + 60)
-    assert _has_pixel(img, fg, band), 'brak tekstu na czerwonym pasku błędu'
-
-
-def test_no_status_bar_when_status_expired(app_main, app):
-    """Po wygaśnięciu timeoutu paska statusu (status_until w przeszłości) NIE
-    ma już pomarańczowego/czerwonego prostokąta na klatce — pasek nie zostaje
-    'zawieszony' na ekranie."""
-    app._status = 'Generuję PDF...'
+def test_no_status_text_when_status_expired(app_main, app):
+    """Po wygaśnięciu timeoutu (status_until w przeszłości) komunikat NIE jest
+    już rysowany — i self._status jest aktywnie czyszczony (nie zawiesza się
+    'po cichu' na ekranie mimo wygaśnięcia)."""
+    app._status = 'Generuję raport (chwila)...'
     app._status_until = sys.modules['sdl2'].SDL_GetTicks() - 1000   # w przeszłości
     app._draw()
-    orange = app_main.ORANGE[:3]
-    red = app_main.STATBAR_RED[:3]
-    assert not _bg_rows(app.img, orange), 'pasek pomarańczowy nie powinien być widoczny po timeoucie'
-    assert not _bg_rows(app.img, red), 'pasek czerwony nie powinien być widoczny po timeoucie'
+    assert app._status == '', 'self._status powinien być wyczyszczony po timeoucie'
+    sel = app_main.SEL[:3]
+    assert not _has_pixel(app.img, sel, range(H - 44, H - 24), x_range=(4, 300)), (
+        'tekst statusu nie powinien być widoczny po timeoucie')

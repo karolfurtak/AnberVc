@@ -57,28 +57,21 @@ YEL  = (255, 205, 70, 255)
 RED  = (240, 95, 95, 255)
 DIM  = (120, 132, 148, 255)
 SEP  = (40, 50, 65, 255)
-SEL  = (255, 200, 80, 255)
+SEL  = (255, 230, 90, 255)       # zaznaczenie pola + tekst statusu (kanon AnberWM)
 BOXG = (30, 70, 45, 255)
 ROWSEL = (35, 55, 80, 255)
-ORANGE   = (235, 140, 30, 255)   # pasek statusu „Generuję PDF…” / „Zapisano…”
-ORANGE_TX = (20, 14, 4, 255)     # tekst na pomarańczowym pasku (max kontrast)
-STATBAR_RED = (150, 35, 35, 255)  # pasek błędu (spójny styl z paskiem statusu)
 
-# evdev — REALNE kody TEGO egzemplarza (RG40XX V), zweryfikowane empirycznie:
-#   źródło = logi /mnt/data/anberwm.log + /mnt/data/anberpkm.log (faktycznie
-#   emitowane kody) oraz działający handler AnberWM (komentarz „realna mapa”).
-#   UWAGA: nominalne kody 310/311/313 z „kanonicznej” mapy NIE są emitowane na
-#   tym urządzeniu — dlatego stare BTN_R2=313 było MARTWE i R2 nie robił PDF-a.
-#   Z AnberPKM/AnberWM bierzemy TYLKO kody przycisków, NIE logikę obsługi wartości.
-#   Barki (zbiór kodów tego egzemplarza = {309,312,314,315}; L2=314 i R2=315
-#   potwierdzone działaniem): L1=309 (krok−) · R1=312 (wolne) · L2=314 (krok+) ·
-#   R2=315 (PDF). L1/R1 = inferencja przez eliminację 2026-07-12 — user
-#   potwierdził, że fizyczny L1 NIE emituje 312, więc 312≠L1 → przez eliminację
-#   L1=309, R1=312. POTWIERDZIĆ pomiarem (log evdev) gdy konsola stabilna.
+# evdev — REALNE kody TEGO egzemplarza (RG40XX V), ustalenie ze sprzętu
+# potwierdzone NIEZALEŻNIE w AnberWM i AnberISA: barki emitują izolowalnie
+# tylko 309=R1, 314=L2, 315=R2. L1 jest NIEROZRÓŻNIALNY od SELECT/START —
+# cała pula {308,310,311,312,313} emituje identycznie na tym egzemplarzu.
+# Dlatego krok W DÓŁ wiążemy z CAŁĄ pulą (wzorzec AnberWM main.py / AnberISA),
+# NIE z pojedynczym kodem 309 (309 to fizycznie R1, nie L1 — stare
+# BTN_L1=309 było martwe, R1 nigdy nie jest naciskany jako „L1”).
 EV_KEY, EV_ABS = 1, 3
 BTN_A, BTN_X = 304, 307
-BTN_L1, BTN_L2 = 309, 314        # L1 = rozmiar kroku −, L2 = rozmiar kroku +
-BTN_R1 = 312                     # R1 = wolne (bez akcji), zdefiniowane dla jasności
+BTN_L2 = 314                     # L2 = rozmiar kroku + (izolowalny)
+STEP_DOWN_CODES = frozenset({308, 310, 311, 312, 313})  # pula L1/SELECT/START
 BTN_R2 = 315                     # R2 = raport PDF (realny kod; 313 był martwy)
 BTN_MODE, KEY_MENU = 316, 354
 EXIT_KEYS = {BTN_MODE, KEY_MENU}
@@ -272,28 +265,30 @@ class VcApp:
 
     def _make_report(self):
         """R2 → raport PDF do druku (wspólny silnik serii Anber*). NIE zmienia
-        self.vals — tylko czyta bieżący wynik i stan pól."""
+        self.vals — tylko czyta bieżący wynik i stan pól. Komunikat statusu w
+        stylu AnberWM: zwykły tekst przy dolnej krawędzi, bez paska/tła."""
         if self.rec is None:                      # błąd obliczeń → komunikat, nie cisza
             self._status = 'Brak wyniku obliczeń — popraw parametry (PDF pominięty).'
             self._status_until = sdl2.SDL_GetTicks() + 5000
             self.dirty = True
             return
-        self._status = 'Generuję PDF...'
+        self._status = 'Generuję raport (chwila)...'
         self.dirty = True
-        self.render()
+        self.render()                              # WYMUŚ render PRZED blokującym generowaniem
         try:
             from vc_lib.report import generate_pdf
             params = {k: self.vals[k] for k in (
                 'diameter_mm', 'vc', 'rpm_min', 'rpm_max', 'n_settings', 'tool_max_rpm')}
             params['vc_unit'] = VC_UNITS[int(self.vals['vc_unit'])]
             operacja = PRESETS[int(self.vals['preset'])]['name']
-            path = generate_pdf(params, self.rec, operacja)
-            self._status = 'Zapisano raport PDF ✓'   # KRÓTKI (pełna ścieżka tylko w logu)
-            self._log(f'PDF: {path}')
+            out = generate_pdf(params, self.rec, operacja)
+            base = os.path.basename(out)           # pełna ścieżka tylko w logu
+            self._status = self._fit_status('✔ Zapisano: ', base, self.f_sm, W - 16)
+            self._log(f'PDF: {out}')
         except Exception as e:
-            self._status = f'Błąd PDF: {e}'
+            self._status = f'✘ Błąd: {str(e)[:42]}'
             self._log(f'PDF ERR: {e}')
-        self._status_until = sdl2.SDL_GetTicks() + 6000
+        self._status_until = sdl2.SDL_GetTicks() + 5000
         self.dirty = True
 
     def _recompute(self):
@@ -350,25 +345,31 @@ class VcApp:
             lines.append(cur)
         return lines
 
-    def _status_bar(self, y, txt, bg, fg, font=None):
-        """Pasek statusu: prostokąt tła pełnej szerokości + tekst WYŚRODKOWANY —
-        przywrócony/odtworzony motyw komunikatu 'Generuję PDF...' / stanu po
-        zapisie (czytelny pomarańczowy pasek zamiast zwykłego tekstu na tle).
-        Zwraca y ZA paskiem (do dalszego układu)."""
+    def _fit_status(self, prefix, name, font, maxpx):
+        """Zbuduj `prefix+name` mierząc TĄ SAMĄ metryką co reszta UI
+        (PIL textlength); jeśli nie mieści się w maxpx, SKRÓĆ SAMĄ nazwę
+        wielokropkiem w środku (prefix zostaje nietknięty) tak, by całość
+        gwarantowanie mieściła się na ekranie — nazwa raportu AnberVc bywa
+        długa (data+parametry w nazwie pliku)."""
         d = self.draw
-        font = font or self.f_sm
-        x0, x1 = 10, W - 10
-        pad = 6
-        lines = self._wrap(txt, font, x1 - x0 - 2 * pad)
-        line_h = 15
-        h = 2 * pad + len(lines) * line_h
-        d.rectangle([(x0, y), (x1, y + h)], fill=bg, outline=(0, 0, 0, 120), width=1)
-        ty = y + pad
-        for line in lines:
-            tw = d.textlength(line, font=font)
-            self._t(x0 + (x1 - x0 - tw) // 2, ty, line, font, fg)
-            ty += line_h
-        return y + h + 6
+        full = prefix + name
+        if d.textlength(full, font=font) <= maxpx:
+            return full
+        avail = maxpx - d.textlength(prefix, font=font)
+        ell = '…'
+        if avail <= d.textlength(ell, font=font):
+            return prefix + ell
+        lo, hi, best = 0, len(name), ell
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            half = mid // 2
+            cand = (name[:half] + ell + name[len(name) - (mid - half):]) if mid > 0 else ell
+            if d.textlength(cand, font=font) <= avail:
+                best = cand
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return prefix + best
 
     def _fmt_val(self, name, v):
         if name == 'vc_unit':
@@ -454,16 +455,14 @@ class VcApp:
                 self._t(rx + 214, ty, flag, self.f_sm, fcol)
                 ty += 16
 
-        # komunikaty (status PDF / ostrzeżenia) — pasek statusu, ZAWIJANE (bez ucinania)
-        show_status = self._status and sdl2.SDL_GetTicks() < self._status_until
+        # komunikat raportu (styl AnberWM): zwykły tekst przy dolnej krawędzi,
+        # bez paska/tła/wyśrodkowania — auto-znikanie po 5 s (ujednolicone)
+        if self._status and sdl2.SDL_GetTicks() > self._status_until:
+            self._status = ''                      # timeout minął → nie rysuj
+        show_status = bool(self._status)
         wy = 330
         if show_status:
-            # pasek statusu: pomarańczowy dla „Generuję PDF…”/„Zapisano…”,
-            # czerwony (ten sam mechanizm paska) dla błędu — czytelny motyw
-            # zamiast zwykłego tekstu na tle
-            is_err = self._status.startswith('Błąd') or self._status.startswith('Brak')
-            bg, fg = (STATBAR_RED, FG) if is_err else (ORANGE, ORANGE_TX)
-            wy = self._status_bar(wy, self._status, bg, fg)
+            self._t(8, H - 38, self._status, self.f_sm, SEL)
         elif r and r.warnings:
             for w in r.warnings:
                 for line in self._wrap('! ' + w, self.f_sm, 300):
@@ -550,8 +549,8 @@ class VcApp:
                                 self._recompute()
                             elif e.code == BTN_R2:
                                 self._make_report()      # R2 → raport PDF (nie rusza wartości)
-                            elif e.code == BTN_L1:
-                                self._step_size(-1)      # L1 → mniejszy krok (nie rusza wartości)
+                            elif e.code in STEP_DOWN_CODES:
+                                self._step_size(-1)      # L1/SELECT/START (pula) → mniejszy krok
                             elif e.code == BTN_L2:
                                 self._step_size(+1)      # L2 → większy krok (nie rusza wartości)
                         elif e.type == EV_ABS:

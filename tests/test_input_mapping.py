@@ -1,16 +1,23 @@
 # -*- coding: utf-8 -*-
 """Testy mapowania wejścia AnberVc (pytest).
 
-Dwie klasy regresji, które te testy pilnują:
+Trzy klasy regresji, które te testy pilnują:
   1. R2 nie generuje PDF-a  → zły evdev-kod R2 (było 313, martwe; realne 315).
   2. Wartości wejściowe „mrugają”/zmieniają się przy MENU / nawigacji / kroku / R2
      → wartość pola MUSI się zmieniać wyłącznie na jawną regulację usera.
+  3. Krok W DÓŁ (dawniej pojedynczy BTN_L1=309) nie działał, bo na tym
+     egzemplarzu L1 jest NIEROZRÓŻNIALNY od SELECT/START — cała pula
+     {308,310,311,312,313} emituje identycznie (ustalenie potwierdzone
+     niezależnie w AnberWM/AnberISA). KAŻDY kod z tej puli musi wywoływać
+     krok w dół; L2=314 (izolowalny) zostaje krokiem w górę.
 
 Logika sterowania kroku żyje w vc_lib (czysta, bez SDL) — testowana wprost.
 Reszta (obsługa evdev w app/main.py) walidowana statycznie przez AST (bez SDL).
 """
 import ast
 import pathlib
+
+import pytest
 
 from vc_lib import STEP_MODES, clamp_step_idx
 
@@ -39,17 +46,19 @@ def test_clamp_step_idx_bounds_no_wrap():
 
 # ── R2: właściwy kod evdev (regresja „R2 nie robi PDF-a”) ─────────────────────
 def _const_value(name):
-    """Wyłuskaj z AST wartość stałej modułu (obsługuje przypisania krotkowe)."""
+    """Wyłuskaj z AST wartość stałej modułu (obsługuje przypisania krotkowe
+    i wywołania frozenset({...}) — jak STEP_DOWN_CODES)."""
     for node in _TREE.body:
         if isinstance(node, ast.Assign):
             targets = node.targets[0]
             names = ([t.id for t in targets.elts]
                      if isinstance(targets, ast.Tuple) else [getattr(targets, 'id', None)])
             if name in names:
-                if isinstance(targets, ast.Tuple):
-                    i = names.index(name)
-                    return ast.literal_eval(node.value.elts[i])
-                return ast.literal_eval(node.value)
+                val_node = (node.value.elts[names.index(name)]
+                            if isinstance(targets, ast.Tuple) else node.value)
+                if isinstance(val_node, ast.Call) and getattr(val_node.func, 'id', None) == 'frozenset':
+                    return frozenset(ast.literal_eval(val_node.args[0]))
+                return ast.literal_eval(val_node)
     raise AssertionError(f'stała {name} nie znaleziona w app/main.py')
 
 
@@ -58,20 +67,77 @@ def test_r2_code_is_real_device_value():
     assert _const_value('BTN_R2') == 315
 
 
-def test_shoulder_step_codes():
-    # L1 = 309 (krok−), L2 = 314 (krok+) — inferencja przez eliminację
-    # 2026-07-12 (user potwierdził, że fizyczny L1 NIE emituje 312; zbiór
-    # kodów tego egzemplarza = {309,312,314,315}, L2=314/R2=315 potwierdzone
-    # działaniem → przez eliminację 312≠L1, więc L1=309). POTWIERDZIĆ
-    # pomiarem gdy konsola stabilna.
-    assert _const_value('BTN_L1') == 309
+def test_l2_is_step_up_code():
+    # L2 = 314 (izolowalny, krok w górę) — potwierdzone działaniem na sprzęcie
     assert _const_value('BTN_L2') == 314
-    assert _const_value('BTN_R1') == 312   # R1 zdefiniowany, bez akcji
+
+
+def test_step_down_pool_matches_wm_isa_hardware_finding():
+    # L1 NIEROZRÓŻNIALNY od SELECT/START na tym egzemplarzu (ustalenie
+    # potwierdzone niezależnie w AnberWM i AnberISA) — cała pula emituje
+    # identycznie, więc krok W DÓŁ musi być związany z całą pulą, nie 309 samym.
+    assert _const_value('STEP_DOWN_CODES') == frozenset({308, 310, 311, 312, 313})
 
 
 def test_dead_code_313_not_used_as_r2():
     # 313 nie może być już przypisane do R2 (martwy kod na tym urządzeniu)
     assert _const_value('BTN_R2') != 313
+
+
+def test_no_shoulder_code_collides_with_other_bindings():
+    """Cała pula STEP_DOWN_CODES {308,310,311,312,313} nie może kolidować z
+    innym używanym bindingiem (A/X/L2/R2/MENU) — inaczej dwa różne przyciski
+    wywołałyby tę samą akcję albo się nadpisały."""
+    pool = _const_value('STEP_DOWN_CODES')
+    others = {
+        'BTN_A': _const_value('BTN_A'),
+        'BTN_X': _const_value('BTN_X'),
+        'BTN_L2': _const_value('BTN_L2'),
+        'BTN_R2': _const_value('BTN_R2'),
+        'KEY_MENU': _const_value('KEY_MENU'),
+    }
+    for name, code in others.items():
+        assert code not in pool, f'{name}={code} koliduje z pulą STEP_DOWN_CODES'
+
+
+def test_menu_key_is_354():
+    # MENU nadal wychodzi bez zmiany wartości (batch pre-scan, patrz
+    # test_exit_checked_before_regulation) — kod nie może pokrywać się z pulą
+    assert _const_value('KEY_MENU') == 354
+    assert 354 not in _const_value('STEP_DOWN_CODES')
+
+
+def test_step_down_pool_routes_to_step_minus_in_run():
+    """W run() sprawdzenie `e.code in STEP_DOWN_CODES` musi wywoływać
+    _step_size(-1) — inaczej cała pula jest zdefiniowana, ale martwa."""
+    run = _func('run')
+    src = ast.get_source_segment(_SRC, run)
+    i_pool = src.find('e.code in STEP_DOWN_CODES')
+    assert i_pool >= 0, 'run() nie sprawdza już całej puli STEP_DOWN_CODES'
+    after = src[i_pool:i_pool + 150]
+    assert '_step_size(-1)' in after, 'pula STEP_DOWN_CODES musi wywoływać _step_size(-1)'
+
+
+def test_l2_routes_to_step_plus_in_run():
+    """BTN_L2 (izolowalny, 314) musi wywoływać _step_size(+1) — krok w górę."""
+    run = _func('run')
+    src = ast.get_source_segment(_SRC, run)
+    i_l2 = src.find('e.code == BTN_L2')
+    assert i_l2 >= 0, 'run() nie sprawdza już BTN_L2'
+    after = src[i_l2:i_l2 + 150]
+    assert '_step_size(+1)' in after or '_step_size(1)' in after, (
+        'BTN_L2 musi wywoływać _step_size(+1)')
+
+
+@pytest.mark.parametrize('code', sorted({308, 310, 311, 312, 313}))
+def test_each_pool_code_triggers_step_down(code):
+    """KAŻDY kod z puli {308,310,311,312,313} — nie tylko dawne 309 — musi
+    należeć do STEP_DOWN_CODES (a przez to trafiać w _step_size(-1), patrz
+    test_step_down_pool_routes_to_step_minus_in_run) i realnie zmniejszać
+    step_idx (clamp_step_idx(idx, -1), patrz test_clamp_step_idx_direction)."""
+    pool = _const_value('STEP_DOWN_CODES')
+    assert code in pool, f'kod {code} musi być w puli krok-w-dół (L1/SELECT/START)'
+    assert clamp_step_idx(2, -1) == 1   # semantyka „krok w dół” dla tej puli
 
 
 # ── odporność: MENU/krok/R2/nawigacja NIE zmieniają wartości pól ──────────────
