@@ -8,13 +8,14 @@ cienki wrapper zapisujący PDF.
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
 
 from .core import BINDING_PL, Recommendation, _pl
 
-OUT_DIR = '/mnt/data/anbervc_raporty'
+OUT_DIR = os.environ.get('ANBERVC_REPORT_DIR', '/mnt/data/sprawozdania/raporty/AnberVc')
 
 
 def _slug(s: str) -> str:
