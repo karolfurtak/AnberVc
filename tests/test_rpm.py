@@ -200,6 +200,38 @@ def test_milling_aluminium_mmin():
     assert math.isclose(r.rec_v, math.pi * 8 * 4600 / 1000, rel_tol=1e-6)
 
 
+# ── SZLIFIERKA TAŚMOWA (v = prędkość taśmy, D = koło kontaktowe) ─────────────
+def test_belt_grinder_preset_exists_with_correct_keys():
+    names = [p['name'] for p in core.PRESETS]
+    assert 'Szlifierka taśmowa' in names
+    preset = next(p for p in core.PRESETS if p['name'] == 'Szlifierka taśmowa')
+    expected_keys = {'name', 'rpm_min', 'rpm_max', 'n_settings',
+                      'tool_max_rpm', 'vc', 'vc_unit', 'diameter_mm'}
+    assert set(preset.keys()) == expected_keys
+    # wartości sensowne dla koła kontaktowego 200 mm / taśmy ~30 m/s
+    assert preset['vc_unit'] == 'm/s'
+    assert 10.0 <= preset['vc'] <= 50.0
+    assert 50.0 <= preset['diameter_mm'] <= 400.0
+    assert 0 < preset['rpm_min'] < preset['rpm_max']
+    assert preset['n_settings'] >= 2
+    assert preset['tool_max_rpm'] >= preset['rpm_max']
+
+
+def test_belt_grinder_recommend_runs_and_is_sane():
+    preset = next(p for p in core.PRESETS if p['name'] == 'Szlifierka taśmowa')
+    r = vc.recommend(**vc.preset_params(preset))
+    # v = π·D·n/60 wiąże (koło 200mm, 4000 obr/min > obroty z limitu v_c)
+    n_v = preset['vc'] * 60 / (math.pi * (preset['diameter_mm'] / 1000.0))
+    assert math.isclose(r.n_safe, n_v, rel_tol=1e-9)
+    assert r.binding == 'vc'
+    assert r.recommended_k is not None
+    assert r.rec_rpm is not None
+    # prędkość taśmy przy rekomendacji nie przekracza limitu (z tolerancją)
+    assert r.rec_v <= preset['vc'] + 1e-6
+    assert r.vc_unit == 'm/s'
+    assert len(r.settings) == preset['n_settings']
+
+
 # ── presety ──────────────────────────────────────────────────────────────────
 def test_presets_all_run():
     for p in core.PRESETS:

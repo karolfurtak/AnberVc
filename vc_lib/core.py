@@ -3,8 +3,9 @@
 
 Bez zależności od SDL/PIL/evdev — czysta logika, w pełni testowalna (pytest, CI).
 
-Zakres: szlifowanie/cięcie (tarcza), WIERCENIE (wiertło) i FREZOWANIE (frez) —
-ta sama fizyka prędkości skrawania (obwodowej):
+Zakres: szlifowanie/cięcie (tarcza), WIERCENIE (wiertło), FREZOWANIE (frez)
+i SZLIFIERKA TAŚMOWA (koło kontaktowe → prędkość taśmy) —
+ta sama fizyka prędkości skrawania/liniowej (obwodowej):
 
     v_c = π · D · n / 60          [v_c] = m/s, [D] = m, [n] = obr/min
     v_c = π · D · n / 1000        [v_c] = m/min, [D] = mm, [n] = obr/min
@@ -227,6 +228,14 @@ PRESETS = [
         'name': 'Frezowanie stal HSS',
         'rpm_min': 1000, 'rpm_max': 10000, 'n_settings': 6,
         'tool_max_rpm': 100000, 'vc': 25.0, 'vc_unit': 'm/min', 'diameter_mm': 8.0,
+    },
+    # Szlifierka taśmowa: ta sama fizyka v=π·D·n/60, ale D = średnica koła
+    # napędowego/kontaktowego (nie taśmy), v = prędkość LINIOWA taśmy [m/s].
+    # D = koło kontaktowe, v = prędkość taśmy.
+    {
+        'name': 'Szlifierka taśmowa',
+        'rpm_min': 500, 'rpm_max': 4000, 'n_settings': 8,
+        'tool_max_rpm': 5000, 'vc': 30.0, 'vc_unit': 'm/s', 'diameter_mm': 200.0,
     },
 ]
 
