@@ -180,7 +180,7 @@ def recommend(rpm_min: float = DEFAULTS['rpm_min'],
 
     if rpm_max > tool_max_rpm:
         warnings.append(
-            f'Max obroty maszyny ({_pl(rpm_max)}) przekraczają znamionowe narzędzia '
+            f'Maksymalne obroty maszyny ({_pl(rpm_max)}) przekraczają znamionowe narzędzia '
             f'({_pl(tool_max_rpm)}) — nie ustawiaj wyżej niż nastawienie bezpieczne.')
 
     top = settings[-1]
@@ -198,7 +198,7 @@ def recommend(rpm_min: float = DEFAULTS['rpm_min'],
 BINDING_PL = {
     'vc':      'limit prędkości skrawania',
     'tool':    'obroty znamionowe narzędzia',
-    'machine': 'max obroty maszyny',
+    'machine': 'maksymalne obroty maszyny',
 }
 
 # ── presety operacji/materiału (opcjonalne skróty) ───────────────────────────
