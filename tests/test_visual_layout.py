@@ -468,3 +468,75 @@ def test_no_status_bar_or_text_when_status_expired(app_main, app):
         'tekst statusu nie powinien być widoczny po timeoucie')
     assert not _has_full_width_run(app.img, H - 40, H - 24, wm_bar), (
         'pasek tła statusu nie powinien być widoczny po timeoucie')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Auto-znikanie paska statusu BEZ inputu (zgłoszenie usera: „komunikat wisi
+# dłużej niż 5 s, znika dopiero przy następnym renderze”). run() renderuje
+# WYŁĄCZNIE gdy self.dirty=True; bez _expire_status_if_due() nic nie ustawiało
+# dirty=True po samym upływie 5 s (input był jedynym wyzwalaczem re-renderu),
+# więc pasek wisiał aż do kolejnego przycisku. _expire_status_if_due() jest
+# wołane co iterację run() (pętla i tak budzi się co ~16 ms) i tylko ustawia
+# dirty=True, gdy status realnie wygasł — bez busy-loopa ponad istniejący.
+# ═══════════════════════════════════════════════════════════════════════════
+def test_expire_status_if_due_sets_dirty_when_timeout_passed(app):
+    """Sedno fixu: status wygasły + dirty=False (stan „po ostatnim renderze,
+    bez żadnego inputu od tamtej pory” — dokładnie sytuacja ze zgłoszenia) →
+    _expire_status_if_due() MUSI ustawić dirty=True, żeby run() wywołało
+    render() i wyczyściło pasek SAMO, bez naciśnięcia przycisku."""
+    app._status = 'Generuję raport (chwila)...'
+    app._status_until = sys.modules['sdl2'].SDL_GetTicks() - 1000   # w przeszłości
+    app.dirty = False
+    app._expire_status_if_due()
+    assert app.dirty is True, (
+        'status wygasł, ale _expire_status_if_due() nie wymusiło dirty=True — '
+        'pasek zostałby na ekranie do następnego inputu (regresja zgłoszona przez usera)')
+
+
+def test_expire_status_if_due_noop_while_status_still_active(app):
+    """Status jeszcze aktywny (status_until w przyszłości) → NIE wymuszaj
+    dirty=True bez potrzeby (brak busy-loopa/nadmiernych renderów)."""
+    app._status = 'Generuję raport (chwila)...'
+    app._status_until = sys.modules['sdl2'].SDL_GetTicks() + 60000
+    app.dirty = False
+    app._expire_status_if_due()
+    assert app.dirty is False
+
+
+def test_expire_status_if_due_noop_when_no_status(app):
+    """Brak aktywnego statusu → nic do wygaszenia, dirty nietknięte."""
+    app._status = ''
+    app._status_until = sys.modules['sdl2'].SDL_GetTicks() - 1000
+    app.dirty = False
+    app._expire_status_if_due()
+    assert app.dirty is False
+
+
+def test_status_auto_clears_and_renders_without_input_like_run_loop(app_main, app):
+    """END-TO-END (bez SDL/evdev): symuluje DOKŁADNIE sekwencję jednej iteracji
+    run() przy BRAKU inputu — _expire_status_if_due(), potem `if self.dirty:
+    render()` — po tym jak realny 'Generuję raport...' już minął 5 s. Musi:
+    (1) sam z siebie wywołać render (bez żadnego przycisku), (2) wyczyścić
+    self._status, (3) pasek WM_BAR/tekst SEL faktycznie zniknąć z klatki."""
+    app._status = 'Generuję raport (chwila)...'
+    app._status_until = sys.modules['sdl2'].SDL_GetTicks() - 1000   # 5 s+ temu, brak inputu odtąd
+    app.dirty = False                                               # stan „po ostatnim renderze”
+
+    rendered = {'called': False}
+
+    def _fake_render():
+        rendered['called'] = True
+        app._draw()
+
+    # dokładna kolejność run(): _expire_status_if_due(now) → if self.dirty: render()
+    app._expire_status_if_due()
+    if app.dirty:
+        _fake_render()
+
+    assert rendered['called'], (
+        'run() nie wywołałoby render() bez inputu — pasek wisiałby do następnego przycisku')
+    assert app._status == '', 'self._status powinien być wyczyszczony automatycznie, bez inputu'
+    sel = app_main.SEL[:3]
+    wm_bar = app_main.WM_BAR[:3]
+    assert not _has_pixel(app.img, sel, range(H - 44, H - 24), x_range=(4, 300))
+    assert not _has_full_width_run(app.img, H - 40, H - 24, wm_bar)

@@ -499,6 +499,22 @@ class VcApp:
         sdl2.SDL_RenderPresent(self.ren)
         self.dirty = False
 
+    def _expire_status_if_due(self, now=None):
+        """Wybudź render, gdy komunikat statusu (pasek WM_BAR) wygasł.
+
+        _draw() SAM czyści self._status po `_status_until` (patrz L467-468),
+        ALE tylko gdy zostanie wywołane — a run() renderuje wyłącznie gdy
+        self.dirty=True. Bez inputu nic nie ustawiało dirty=True po upływie
+        5 s, więc pasek „Generuję/Zapisano/Błąd” wisiał na ekranie aż do
+        NASTĘPNEGO naciśnięcia przycisku (klasa błędu: „znika dopiero przy
+        następnym renderze”, zgłoszona przez usera). Pętla run() i tak budzi
+        się co ~16 ms (SDL_Delay), więc wystarczy tu tylko ustawić dirty=True
+        — bez zmiany select()/timeoutu i bez busy-loopa ponad to, co już jest."""
+        if now is None:
+            now = sdl2.SDL_GetTicks()
+        if self._status and now > self._status_until:
+            self.dirty = True
+
     # ── pętla ────────────────────────────────────────────────────────────────
     def run(self):
         ev = sdl2.SDL_Event()
@@ -523,6 +539,8 @@ class VcApp:
                     if self._gp and select.select([self._gp.fd], [], [], 0)[0]:
                         self._gp.read()          # drenuj, by MENU po wybudzeniu działał
                     continue
+
+                self._expire_status_if_due(now)      # auto-znikanie paska statusu bez inputu
 
                 if self.dirty:
                     self.render()
