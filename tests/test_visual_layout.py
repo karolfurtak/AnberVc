@@ -5,9 +5,9 @@ inspekcja PIKSELI wyrenderowanego obrazu.
 Klasa regresji, którą te testy pilnują: „test przechodzi, apka na ekranie
 wygląda zepsuta". Sam fakt, że _clip()/_wrap()/_fit_status() ISTNIEJĄ i są
 wołane nie gwarantuje, że naprawdę mieszczą tekst w 640×480 ani że komunikat
-raportu faktycznie wygląda jak zwykły tekst (styl AnberWM) bez paska/tła —
-to mierzymy tutaj wprost, metryką fontu PIL (ta sama, której używa _draw())
-oraz odczytem pikseli z wyrenderowanej klatki.
+raportu faktycznie wygląda jak REALNY AnberWM (ciemnozielony pasek tła +
+żółty tekst na nim) — to mierzymy tutaj wprost, metryką fontu PIL (ta sama,
+której używa _draw()) oraz odczytem pikseli z wyrenderowanej klatki.
 
 Dwie klasy assercji:
   (a) SZEROKOŚĆ: najdłuższe realne treści (etykiety pól, wartości graniczne,
@@ -16,9 +16,11 @@ Dwie klasy assercji:
       dostępnej szerokości (kolumny albo całego ekranu), parametrycznie po
       WSZYSTKICH polach/komunikatach, nie próbce.
   (b) WYGLĄD komunikatu statusu: po realnym _draw() na wyrenderowanej klatce
-      tekst statusu musi być widoczny przy dolnej krawędzi (x=8, y≈H-38) w
-      kolorze SEL, BEZ żadnego pełnoszerokościowego prostokąta tła (dawny
-      pomarańczowy/czerwony pasek — USUNIĘTY na rzecz kanonu AnberWM).
+      MUSI istnieć ciemnozielony pasek tła pełnej szerokości w pasie
+      y∈[H-40, H-24) (kolor WM_BAR = (38,58,44)), a tekst statusu musi być
+      widoczny NA tym pasku przy dolnej krawędzi (x=8, y≈H-38) w kolorze SEL
+      = (255,210,90) — to jest kanon REALNEGO AnberWM (main.py ~L33,
+      570-572, 645-669), nie wcześniej błędnie odczytany „goły tekst".
 
 app/main.py importuje `sdl2` bezwarunkowo i ładuje font z absolutnej ścieżki
 konsoli (/usr/share/fonts/.../DejaVuSansMono.ttf) — obu może brakować na PC
@@ -263,15 +265,21 @@ def test_status_timeout_unified_to_5000ms():
 
 
 def test_status_bar_method_and_constants_removed(app_main):
-    """Stary pomarańczowy pasek statusu (_status_bar + ORANGE/ORANGE_TX/
-    STATBAR_RED) MUSI zniknąć — kanon AnberWM to zwykły tekst, bez paska."""
+    """Stary BŁĘDNY wariant paska statusu (_status_bar + ORANGE/ORANGE_TX/
+    STATBAR_RED — pomarańczowy/czerwony, osobna metoda rysująca) MUSI zniknąć.
+    Realny kanon AnberWM to WM_BAR (38,58,44) rysowany inline w _draw() +
+    tekst SEL na nim — patrz test_status_message_has_background_bar."""
     assert not hasattr(app_main.VcApp, '_status_bar'), '_status_bar powinna być usunięta'
     for name in ('ORANGE', 'ORANGE_TX', 'STATBAR_RED'):
         assert not hasattr(app_main, name), f'{name} powinien być usunięty (stary pasek statusu)'
 
 
 def test_sel_color_matches_wm_canon(app_main):
-    assert app_main.SEL == (255, 230, 90, 255)
+    assert app_main.SEL == (255, 210, 90, 255)
+
+
+def test_wm_bar_color_constant_defined(app_main):
+    assert app_main.WM_BAR == (38, 58, 44, 255)
 
 
 # ── komunikaty statusu DYNAMICZNE ('✔ Zapisano: ...'/'✘ Błąd: ...') — oracle
@@ -331,32 +339,26 @@ def test_real_make_report_error_status_fits_and_is_prefixed(app, app_main, monke
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# (b) WYGLĄD — render pełnej klatki, inspekcja pikseli: komunikat statusu to
-#     ZWYKŁY tekst (kolor SEL) przy dolnej krawędzi, BEZ prostokąta tła.
+# (b) WYGLĄD — render pełnej klatki, inspekcja pikseli: komunikat statusu ma
+#     ciemnozielony pasek tła (kanon REALNEGO AnberWM) pod żółtym tekstem.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _any_solid_bar_row(img, y_from, y_to, bg_rgb, min_run=400):
+def _has_full_width_run(img, y_from, y_to, rgb, min_run=400):
     """True, jeśli w zakresie wierszy [y_from, y_to) istnieje CIĄGŁY poziomy
-    pas (≥min_run px) JEDNEGO koloru różnego od tła strony — odcisk dawnego
-    prostokąta paska statusu. Zwykły tekst (wąskie glify) nigdy nie tworzy
-    tak długiego jednolitego biegu, więc to bezpiecznie odróżnia „pasek" od
-    „tekstu na tle"."""
+    bieg (≥min_run px) DOKŁADNIE koloru `rgb` — odcisk pełnoszerokościowego
+    prostokąta tła (WM_BAR) rysowanego pod komunikatem statusu. Tekst na pasku
+    zajmuje tylko lewą część, więc prawa część paska (bez glifów) daje długi
+    jednolity bieg — to bezpiecznie wykrywa obecność paska niezależnie od
+    treści komunikatu."""
     px = img.load()
     w = img.size[0]
     for y in range(y_from, y_to):
         run = maxrun = 0
-        prev = None
         for x in range(w):
-            c = px[x, y][:3]
-            if c == bg_rgb:
-                run = 0
-                prev = None
-                continue
-            if c == prev:
+            if px[x, y][:3] == rgb:
                 run += 1
             else:
-                run = 1
-                prev = c
+                run = 0
             maxrun = max(maxrun, run)
         if maxrun >= min_run:
             return True
@@ -379,20 +381,21 @@ def _render_with_status(app_main, app, status_text):
     return app.img
 
 
-def test_status_message_has_no_background_bar(app_main, app):
-    """Komunikat statusu (styl AnberWM) to zwykły tekst na tle strony — NIE ma
-    już pełnoszerokościowego prostokąta tła (dawny pomarańczowy/czerwony pasek)
-    w obszarze, gdzie kiedyś się rysował (y≈300..H-10)."""
+def test_status_message_has_background_bar(app_main, app):
+    """Komunikat statusu (kanon REALNEGO AnberWM) ma pełnoszerokościowy
+    ciemnozielony pasek tła (38,58,44) w pasie y∈[H-40, H-24) — narysowany
+    PRZED tekstem, na całej szerokości ekranu."""
     img = _render_with_status(app_main, app, 'Generuję raport (chwila)...')
-    bg = app_main.BG[:3]
-    assert not _any_solid_bar_row(img, 300, H - 10, bg), (
-        'wykryto pełnoszerokościowy prostokąt tła w obszarze statusu — '
-        'oczekiwano zwykłego tekstu bez paska (styl AnberWM)')
+    wm_bar = app_main.WM_BAR[:3]
+    assert _has_full_width_run(img, H - 40, H - 24, wm_bar), (
+        'brak pełnoszerokościowego paska tła WM_BAR (38,58,44) pod komunikatem statusu — '
+        'oczekiwano kanonu REALNEGO AnberWM (pasek + tekst na nim)')
 
 
 def test_status_text_drawn_at_bottom_left_in_sel_color(app_main, app):
-    """Tekst statusu narysowany blisko x=8, y=H-38, kolorem SEL (żółty,
-    kanon AnberWM) — niezależnie od stanu (generowanie/sukces/błąd)."""
+    """Tekst statusu narysowany blisko x=8, y=H-38, kolorem SEL (żółty
+    255,210,90, kanon REALNEGO AnberWM), NA pasku tła — niezależnie od stanu
+    (generowanie/sukces/błąd)."""
     sel = app_main.SEL[:3]
     for text in ('Generuję raport (chwila)...', '✔ Zapisano: raport.pdf',
                  '✘ Błąd: dysk pełny'):
@@ -401,14 +404,18 @@ def test_status_text_drawn_at_bottom_left_in_sel_color(app_main, app):
             f'brak tekstu statusu w kolorze SEL przy dolnej krawędzi dla: {text!r}')
 
 
-def test_no_status_text_when_status_expired(app_main, app):
+def test_no_status_bar_or_text_when_status_expired(app_main, app):
     """Po wygaśnięciu timeoutu (status_until w przeszłości) komunikat NIE jest
-    już rysowany — i self._status jest aktywnie czyszczony (nie zawiesza się
-    'po cichu' na ekranie mimo wygaśnięcia)."""
+    już rysowany — ani tekst, ani pasek tła — i self._status jest aktywnie
+    czyszczony (nie zawiesza się 'po cichu' na ekranie mimo wygaśnięcia).
+    Auto-znikanie po 5 s to świadomy wymóg usera (realny WM się nie chowa)."""
     app._status = 'Generuję raport (chwila)...'
     app._status_until = sys.modules['sdl2'].SDL_GetTicks() - 1000   # w przeszłości
     app._draw()
     assert app._status == '', 'self._status powinien być wyczyszczony po timeoucie'
     sel = app_main.SEL[:3]
+    wm_bar = app_main.WM_BAR[:3]
     assert not _has_pixel(app.img, sel, range(H - 44, H - 24), x_range=(4, 300)), (
         'tekst statusu nie powinien być widoczny po timeoucie')
+    assert not _has_full_width_run(app.img, H - 40, H - 24, wm_bar), (
+        'pasek tła statusu nie powinien być widoczny po timeoucie')

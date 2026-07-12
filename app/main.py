@@ -57,9 +57,10 @@ YEL  = (255, 205, 70, 255)
 RED  = (240, 95, 95, 255)
 DIM  = (120, 132, 148, 255)
 SEP  = (40, 50, 65, 255)
-SEL  = (255, 230, 90, 255)       # zaznaczenie pola + tekst statusu (kanon AnberWM)
+SEL  = (255, 210, 90, 255)       # zaznaczenie pola + tekst statusu (kanon REALNEGO AnberWM)
 BOXG = (30, 70, 45, 255)
 ROWSEL = (35, 55, 80, 255)
+WM_BAR = (38, 58, 44, 255)       # ciemnozielony pasek tła pod komunikatem statusu (kanon AnberWM)
 
 # evdev — REALNE kody TEGO egzemplarza (RG40XX V), ustalenie ze sprzętu
 # potwierdzone NIEZALEŻNIE w AnberWM i AnberISA: barki emitują izolowalnie
@@ -266,7 +267,8 @@ class VcApp:
     def _make_report(self):
         """R2 → raport PDF do druku (wspólny silnik serii Anber*). NIE zmienia
         self.vals — tylko czyta bieżący wynik i stan pól. Komunikat statusu w
-        stylu AnberWM: zwykły tekst przy dolnej krawędzi, bez paska/tła."""
+        stylu REALNEGO AnberWM: ciemnozielony pasek tła pełnej szerokości
+        u dołu ekranu + żółty tekst na nim."""
         if self.rec is None:                      # błąd obliczeń → komunikat, nie cisza
             self._status = 'Brak wyniku obliczeń — popraw parametry (PDF pominięty).'
             self._status_until = sdl2.SDL_GetTicks() + 5000
@@ -455,13 +457,16 @@ class VcApp:
                 self._t(rx + 214, ty, flag, self.f_sm, fcol)
                 ty += 16
 
-        # komunikat raportu (styl AnberWM): zwykły tekst przy dolnej krawędzi,
-        # bez paska/tła/wyśrodkowania — auto-znikanie po 5 s (ujednolicone)
+        # komunikat raportu (kanon REALNEGO AnberWM main.py ~L33,570-572,645-669):
+        # ciemnozielony pasek tła pełnej szerokości [(0,H-40),(W,H-24)] fill
+        # WM_BAR, a NA NIM tekst statusu (8,H-38) kolorem SEL. Auto-znikanie po
+        # 5 s to ŚWIADOMY wymóg usera (realny WM się nie chowa — tu ma zniknąć).
         if self._status and sdl2.SDL_GetTicks() > self._status_until:
-            self._status = ''                      # timeout minął → nie rysuj
+            self._status = ''                      # timeout minął → nie rysuj (ani paska)
         show_status = bool(self._status)
         wy = 330
         if show_status:
+            d.rectangle([(0, H - 40), (W, H - 24)], fill=WM_BAR)
             self._t(8, H - 38, self._status, self.f_sm, SEL)
         elif r and r.warnings:
             for w in r.warnings:
