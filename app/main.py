@@ -392,7 +392,7 @@ class VcApp:
 
             # tabela nastawień
             ty = 194
-            self._t(rx, ty, ' k   obr/min     v_c      ok', self.f_sm, DIM)
+            self._t(rx, ty, ' k   obr/min     v_c    bezpieczne', self.f_sm, DIM)
             ty += 16
             for s in r.settings:
                 if ty > H - 60:
@@ -401,7 +401,7 @@ class VcApp:
                 is_rec = (s.k == r.recommended_k)
                 if is_rec:
                     d.rectangle([(rx - 2, ty - 1), (W - 10, ty + 14)], fill=ROWSEL)
-                flag = 'OK' if s.safe else 'NIE'
+                flag = 'TAK' if s.safe else 'NIE'
                 fcol = GRN if s.safe else RED
                 v_str = f'{s.v:>7.1f}'.replace('.', ',')
                 line = f'{s.k:>2}  {s.rpm:>8.0f}  {v_str}   '
