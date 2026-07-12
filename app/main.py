@@ -89,14 +89,14 @@ def plg(x):
 # Pola: (name, unit, default, step_base, min, max, kind, desc)
 #   kind: 'num' (krok=STEP_MODES), 'int' (±1), 'idx' (cykl z zawijaniem)
 FIELDS = [
-    ('preset',       '',        0,      1,   0, len(PRESETS) - 1, 'idx', 'Preset (operacja/materiał)'),
+    ('preset',       '',        0,      1,   0, len(PRESETS) - 1, 'idx', 'Operacja / materiał'),
     ('diameter_mm',  'mm',      125.0,  1.0, 0.5, 2000,   'num', 'Średnica narzędzia D'),
     ('vc',           '',        80.0,   1.0, 0.1, 100000, 'num', 'Prędkość skrawania v_c'),
     ('vc_unit',      '',        0,      1,   0, 1,        'idx', 'Jednostka v_c'),
-    ('rpm_min',      'obr/min', 3000,   100, 0, 200000,   'num', 'Min obroty maszyny'),
-    ('rpm_max',      'obr/min', 12000,  100, 1, 200000,   'num', 'Max obroty maszyny'),
-    ('n_settings',   'szt',     7,      1,   1, 30,       'int', 'Liczba nastawień'),
-    ('tool_max_rpm', 'obr/min', 12500,  100, 1, 1000000, 'num', 'Znam. obroty narzędzia'),
+    ('rpm_min',      'obr/min', 3000,   100, 0, 200000,   'num', 'Minimalne obroty maszyny'),
+    ('rpm_max',      'obr/min', 12000,  100, 1, 200000,   'num', 'Maksymalne obroty maszyny'),
+    ('n_settings',   '',        7,      1,   1, 30,       'int', 'Liczba nastawień'),
+    ('tool_max_rpm', 'obr/min', 12500,  100, 1, 1000000, 'num', 'Znamionowe obroty narzędzia'),
 ]
 LOG = Path('/mnt/data/anbervc.log')
 
@@ -283,7 +283,7 @@ class VcApp:
             self._status = f'Zapisano PDF: {path}'
             self._log(f'PDF: {path}')
         except Exception as e:
-            self._status = f'Blad PDF: {e}'
+            self._status = f'Błąd PDF: {e}'
             self._log(f'PDF ERR: {e}')
         self._status_until = sdl2.SDL_GetTicks() + 6000
         self.dirty = True
@@ -413,7 +413,7 @@ class VcApp:
         show_status = self._status and sdl2.SDL_GetTicks() < self._status_until
         msgs = []
         if show_status:
-            msgs.append((self._status, RED if self._status.startswith('Blad') else GRN))
+            msgs.append((self._status, RED if self._status.startswith('Błąd') else GRN))
         elif r and r.warnings:
             for w in r.warnings:
                 msgs.append(('! ' + w, RED))
@@ -429,7 +429,7 @@ class VcApp:
 
         # stopka
         self._t(12, H - 14,
-                'D-pad pole/wartość  L1/L2 krok −/+  A/X reset  R2 PDF  MENU wyjście',
+                'Krzyżak pole/wartość  L1/L2 krok −/+  A/X przywróć  R2 PDF  MENU wyjście',
                 self.f_sm, DIM)
 
     def _blit(self):

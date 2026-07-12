@@ -112,11 +112,24 @@ def test_only_adjust_and_presets_mutate_values():
 
 def test_exit_checked_before_regulation():
     """MENU/MODE (EXIT_KEYS) sprawdzane PRZED gałęziami regulacji — cała partia
-    zdarzeń z przyciskiem wyjścia kończy się return, nim cokolwiek muśnie stan."""
+    zdarzeń z przyciskiem wyjścia kończy się return, nim cokolwiek muśnie stan.
+
+    To pilnuje realnej przyczyny buga: naciśnięcie MENU wstrzykuje na tym
+    egzemplarzu dodatkowe EV_ABS (jak krzyżak-w-lewo) razem z KEY_MENU w JEDNEJ
+    partii read(); pre-scan całej partii pod kątem EXIT_KEYS i natychmiastowy
+    return NIE pozwala, by to zdarzenie trafiło w _adjust (dekrementacja pola)."""
     run = _func('run')
     src = ast.get_source_segment(_SRC, run)
+    i_prescan = src.find('any(')            # batch-level pre-scan EXIT_KEYS
     i_exit = src.find('EXIT_KEYS')
+    i_forloop = src.find('for e in events:')  # pętla przetwarzania (nie generator)
     i_adjust = src.find('self._adjust')
     i_step = src.find('self._step_size')
-    assert 0 <= i_exit < i_adjust, 'wyjście musi być sprawdzane przed _adjust'
-    assert 0 <= i_exit < i_step, 'wyjście musi być sprawdzane przed _step_size'
+    # pre-scan any(...EXIT_KEYS...) MUSI być przed pętlą przetwarzania zdarzeń
+    assert 0 <= i_prescan < i_forloop, 'pre-scan wyjścia musi poprzedzać pętlę zdarzeń'
+    assert 0 <= i_exit < i_forloop, 'EXIT_KEYS sprawdzane przed przetwarzaniem partii'
+    # a przetwarzanie regulacji (adjust/step) dopiero po pętli-wejściu
+    assert i_forloop < i_adjust, '_adjust dopiero po pre-scanie wyjścia'
+    assert i_forloop < i_step, '_step_size dopiero po pre-scanie wyjścia'
+    # w bloku pre-scanu musi być natychmiastowy return
+    assert 'return' in src[i_prescan:i_forloop], 'pre-scan wyjścia musi robić return'
