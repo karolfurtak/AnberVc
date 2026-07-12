@@ -26,11 +26,36 @@ def _slug(s: str) -> str:
     return s[:32] or 'raport'
 
 
+def _num(x) -> str:
+    """Liczba w nazwie pliku: ASCII, bez kropki (12.5 → '12p5', 80 → '80')."""
+    return f'{x:g}'.replace('.', 'p')
+
+
+def _unit_slug(u: str) -> str:
+    """Jednostka v_c → skrót ASCII do nazwy pliku ('m/s' → 'ms', 'm/min' → 'mmin')."""
+    return {'m/s': 'ms', 'm/min': 'mmin'}.get(u, re.sub(r'[^a-z0-9]+', '', str(u).lower()))
+
+
 def report_filename(operacja: str, params: dict, ts: str | None = None) -> str:
-    """Nazwa pliku z parametrami i znacznikiem czasu."""
+    """Nazwa pliku kodująca kluczowe DANE WEJŚCIOWE + znacznik czasu (ASCII, ≤120 zn.).
+
+    Wzorzec: anbervc_<operacja>_D<D>mm_vc<v_c><jedn>_<rpm_min>-<rpm_max>rpm_
+             N<nastawienia>_tn<obroty_znam_narzedzia>_<ts>.pdf
+    Przykład: anbervc_szlifowanie_tarcza_125_D125mm_vc80ms_3000-12000rpm_N7_tn12500_...pdf
+    """
     ts = ts or time.strftime('%Y%m%d_%H%M%S')
-    d = params.get('diameter_mm', 0)
-    return f'anbervc_{_slug(operacja.split("—")[0])}_D{d:g}mm_{ts}.pdf'
+    op = _slug(operacja.split('—')[0])
+    d = _num(params.get('diameter_mm', 0))
+    vc = _num(params.get('vc', 0))
+    u = _unit_slug(params.get('vc_unit', 'm/s'))
+    rmin = _num(params.get('rpm_min', 0))
+    rmax = _num(params.get('rpm_max', 0))
+    n = int(params.get('n_settings', 0))
+    tn = _num(params.get('tool_max_rpm', 0))
+    tail = f'_D{d}mm_vc{vc}{u}_{rmin}-{rmax}rpm_N{n}_tn{tn}_{ts}.pdf'
+    budget = 120 - len('anbervc_') - len(tail)      # utrzymaj całość ≤120 znaków
+    op = op[:max(1, budget)]
+    return f'anbervc_{op}{tail}'
 
 
 def build_meta(params: dict, rec: Recommendation, operacja: str,

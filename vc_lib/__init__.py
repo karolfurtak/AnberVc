@@ -8,6 +8,8 @@ from .core import (
     DEFAULTS,
     BINDING_PL,
     VC_UNITS,
+    STEP_MODES,
+    clamp_step_idx,
     PRESETS,
     Setting,
     Recommendation,
@@ -23,7 +25,8 @@ from .core import (
 )
 
 __all__ = [
-    'DEFAULTS', 'BINDING_PL', 'VC_UNITS', 'PRESETS', 'Setting', 'Recommendation',
+    'DEFAULTS', 'BINDING_PL', 'VC_UNITS', 'STEP_MODES', 'clamp_step_idx',
+    'PRESETS', 'Setting', 'Recommendation',
     'setting_rpm', 'peripheral_speed', 'v_from_mm', 'rpm_for_v',
     'vc_to_ms', 'ms_to_unit', 'n_safe', 'recommend', 'preset_params',
 ]

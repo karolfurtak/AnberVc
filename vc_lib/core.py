@@ -36,6 +36,17 @@ from dataclasses import dataclass, field
 # ── jednostki prędkości skrawania ────────────────────────────────────────────
 VC_UNITS = ('m/s', 'm/min')
 
+# ── rozmiary kroku regulacji wartości (D-pad ←/→) ────────────────────────────
+# Sterowanie rozmiarem kroku: L1 = mniejszy (−1), L2 = większy (+1) — patrz app.
+STEP_MODES = [0.1, 1, 10, 100, 1000]
+
+
+def clamp_step_idx(idx: int, delta: int, n: int = len(STEP_MODES)) -> int:
+    """Przesuń indeks rozmiaru kroku o delta z ograniczeniem do [0, n-1].
+
+    delta<0 (L1) → mniejszy krok, delta>0 (L2) → większy krok. Bez zawijania."""
+    return max(0, min(n - 1, idx + delta))
+
 
 def _pl(x, nd=None) -> str:
     """Liczba z POLSKIM separatorem dziesiętnym (przecinek)."""

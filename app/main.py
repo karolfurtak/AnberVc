@@ -7,15 +7,20 @@ skrawania v_c) dla Anbernic RG40XX V. Szlifowanie/cięcie, wiercenie, frezowanie
 Dobiera NAJWYŻSZE bezpieczne nastawienie obrotów: n_bezp = min(z limitu v_c,
 obrotów znamionowych narzędzia, max obrotów maszyny).
 
-Sterowanie (pad RG40XX V) — model regulacji jak AnberPKM/AnberWM:
-  D-pad ↑/↓      wybór parametru
-  D-pad ←/→      − / + wartość (o bieżący krok)
-  L1/R1 · L2/R2  szybki krok − / + (L2/R2 = większy)
-  Y              zmiana kroku (0.1 / 1 / 10 / 100 / 1000)
+Sterowanie (pad RG40XX V) — kody evdev z realnej mapy egzemplarza (patrz KEYS.md):
+  D-pad ↑/↓      wybór parametru (pole)
+  D-pad ←/→      − / + WARTOŚĆ pola (o bieżący rozmiar kroku)
+  L1 / L2        rozmiar kroku −/+  (0.1 / 1 / 10 / 100 / 1000)
   A              reset zaznaczonego pola do wartości presetu
   X              reset WSZYSTKICH pól do presetu
+  R2             raport PDF do druku (A4)
   MENU / MODE    wyjście
   POWER          ekran off/on (apka działa dalej)
+
+Zasada odporności: WARTOŚĆ pola zmienia się WYŁĄCZNIE na jawną regulację usera
+(D-pad ←/→ = _adjust, albo A/X = reset do presetu). Nawigacja pól (D-pad ↑/↓),
+zmiana kroku (L1/L2), R2/PDF, wyjście (MENU/MODE) oraz zapis/wczytanie configu
+NIGDY nie ruszają self.vals — to eliminuje klasę błędu „wartości mrugają".
 
 Baza SDL2/render/backlight jak AnberHex; logika w vc_lib (bez SDL, pytest+CI).
 NIE SDL_INIT_JOYSTICK (grabuje event1); PYSDL2_DLL_PATH ustawia wrapper .sh.
@@ -28,7 +33,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))                 # dla power_screen
 sys.path.insert(0, str(_HERE.parent))          # dla pakietu vc_lib
 from vc_lib import (recommend, preset_params, PRESETS, VC_UNITS, BINDING_PL,  # noqa: E402
-                    DEFAULTS)
+                    DEFAULTS, STEP_MODES, clamp_step_idx)
 from vc_lib import config  # noqa: E402
 
 if __name__ == '__main__' and '--selftest' in sys.argv:
@@ -56,15 +61,20 @@ SEL  = (255, 200, 80, 255)
 BOXG = (30, 70, 45, 255)
 ROWSEL = (35, 55, 80, 255)
 
-# evdev — kody jak AnberPKM/AnberWM (potwierdzone na egzemplarzu Karola)
+# evdev — REALNE kody TEGO egzemplarza (RG40XX V), zweryfikowane empirycznie:
+#   źródło = logi /mnt/data/anberwm.log + /mnt/data/anberpkm.log (faktycznie
+#   emitowane kody) oraz działający handler AnberWM (komentarz „realna mapa”).
+#   Barki:  L1=312 (krok−) · L2=314 (krok+) · R1=309 (wolne) · R2=315 (PDF).
+#   UWAGA: nominalne kody 310/311/313 z „kanonicznej” mapy NIE są emitowane na
+#   tym urządzeniu — dlatego stare BTN_R2=313 było MARTWE i R2 nie robił PDF-a.
+#   Z AnberPKM/AnberWM bierzemy TYLKO kody przycisków, NIE logikę obsługi wartości.
 EV_KEY, EV_ABS = 1, 3
-BTN_A, BTN_B, BTN_X, BTN_Y = 304, 305, 307, 308
-BTN_L1, BTN_R1, BTN_L2, BTN_R2 = 310, 311, 312, 313
+BTN_A, BTN_X = 304, 307
+BTN_L1, BTN_L2 = 312, 314        # L1 = rozmiar kroku −, L2 = rozmiar kroku +
+BTN_R2 = 315                     # R2 = raport PDF (realny kod; 313 był martwy)
 BTN_MODE, KEY_MENU = 316, 354
 EXIT_KEYS = {BTN_MODE, KEY_MENU}
 ABS_X, ABS_Y = 16, 17
-
-STEP_MODES = [0.1, 1, 10, 100, 1000]
 
 
 def pl(x, nd=1):
@@ -222,7 +232,10 @@ class VcApp:
         elif name in p:
             self.vals[name] = p[name]
 
-    def _adjust(self, dy, step_boost=0):
+    def _adjust(self, dy):
+        """Jawna regulacja WARTOŚCI zaznaczonego pola (D-pad ←/→). JEDYNE (obok
+        _reset_field/_load_preset) miejsce, które zmienia self.vals — patrz zasada
+        odporności w nagłówku."""
         f = FIELDS[self.field_idx]
         name, unit, _def, _sb, mn, mx, kind, _desc = f
         if kind == 'idx':
@@ -235,22 +248,27 @@ class VcApp:
             v = int(self.vals[name]) + dy
             self.vals[name] = int(max(mn, min(mx, v)))
         else:
-            idx = min(len(STEP_MODES) - 1, self.step_idx + step_boost)
-            factor = STEP_MODES[idx]
+            factor = STEP_MODES[self.step_idx]
             v = self.vals[name] + dy * factor
             self.vals[name] = max(mn, min(mx, round(v, 6)))
         self.dirty = True
         self._cfg_dirty = True
         self._recompute()
 
-    def _cycle_step(self):
-        self.step_idx = (self.step_idx + 1) % len(STEP_MODES)
+    def _step_size(self, delta):
+        """L1 (delta=−1) / L2 (delta=+1): zmiana ROZMIARU kroku. NIE rusza wartości
+        pola — modyfikuje wyłącznie self.step_idx (zasada odporności)."""
+        self.step_idx = clamp_step_idx(self.step_idx, delta)
         self.dirty = True
         self._cfg_dirty = True
 
     def _make_report(self):
-        """R2 → raport PDF do druku (wspólny silnik serii Anber*)."""
-        if self.rec is None:
+        """R2 → raport PDF do druku (wspólny silnik serii Anber*). NIE zmienia
+        self.vals — tylko czyta bieżący wynik i stan pól."""
+        if self.rec is None:                      # błąd obliczeń → komunikat, nie cisza
+            self._status = 'Brak wyniku obliczeń — popraw parametry (PDF pominięty).'
+            self._status_until = sdl2.SDL_GetTicks() + 5000
+            self.dirty = True
             return
         self._status = 'Generuję PDF...'
         self.dirty = True
@@ -411,7 +429,7 @@ class VcApp:
 
         # stopka
         self._t(12, H - 14,
-                'D-pad pole/±  L/R szybki  Y krok  A/X reset  R2 PDF  MENU wyjście',
+                'D-pad pole/wartość  L1/L2 krok −/+  A/X reset  R2 PDF  MENU wyjście',
                 self.f_sm, DIM)
 
     def _blit(self):
@@ -465,15 +483,17 @@ class VcApp:
                         return               # finally → quit() oddaje ekran
 
                 if self._gp and select.select([self._gp.fd], [], [], 0)[0]:
-                    for e in self._gp.read():
-                        if guard:
-                            continue
+                    events = [] if guard else list(self._gp.read())
+                    # WYJŚCIE NAJPIERW: jeśli w tej partii jest MENU/MODE, wyjdź
+                    # CZYSTO — bez przetwarzania JAKIEGOKOLWIEK innego zdarzenia z tej
+                    # partii. Gwarantuje, że przycisk wyjścia nie „muśnie” wartości
+                    # /pola/kroku (klasa błędu: wartości mrugają przy MENU).
+                    if any(e.type == EV_KEY and e.value == 1 and e.code in EXIT_KEYS
+                           for e in events):
+                        return               # finally → quit() oddaje ekran
+                    for e in events:
                         if e.type == EV_KEY and e.value == 1:
-                            if e.code in EXIT_KEYS:
-                                return       # MENU/MODE → finally → quit()
-                            elif e.code == BTN_Y:
-                                self._cycle_step()
-                            elif e.code == BTN_A:
+                            if e.code == BTN_A:
                                 self._reset_field(FIELDS[self.field_idx][0])
                                 self.dirty = True; self._cfg_dirty = True
                                 self._recompute()
@@ -482,18 +502,18 @@ class VcApp:
                                 self.dirty = True; self._cfg_dirty = True
                                 self._recompute()
                             elif e.code == BTN_R2:
-                                self._make_report()      # R2 → raport PDF
-                            elif e.code in (BTN_L1, BTN_R1, BTN_L2):
-                                dy = 1 if e.code == BTN_R1 else -1
-                                boost = 1 if e.code in (BTN_L1, BTN_R1) else 2
-                                self._adjust(dy, step_boost=boost)
+                                self._make_report()      # R2 → raport PDF (nie rusza wartości)
+                            elif e.code == BTN_L1:
+                                self._step_size(-1)      # L1 → mniejszy krok (nie rusza wartości)
+                            elif e.code == BTN_L2:
+                                self._step_size(+1)      # L2 → większy krok (nie rusza wartości)
                         elif e.type == EV_ABS:
                             if e.code == ABS_Y and e.value != 0:
                                 self.field_idx = (self.field_idx +
                                                   (1 if e.value > 0 else -1)) % len(FIELDS)
-                                self.dirty = True
+                                self.dirty = True       # nawigacja pól — bez zmiany wartości
                             elif e.code == ABS_X and e.value != 0:
-                                self._adjust(1 if e.value > 0 else -1)
+                                self._adjust(1 if e.value > 0 else -1)   # jawna regulacja WARTOŚCI
 
                 sdl2.SDL_Delay(16)
         finally:
