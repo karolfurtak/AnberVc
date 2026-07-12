@@ -60,17 +60,25 @@ SEP  = (40, 50, 65, 255)
 SEL  = (255, 200, 80, 255)
 BOXG = (30, 70, 45, 255)
 ROWSEL = (35, 55, 80, 255)
+ORANGE   = (235, 140, 30, 255)   # pasek statusu „Generuję PDF…” / „Zapisano…”
+ORANGE_TX = (20, 14, 4, 255)     # tekst na pomarańczowym pasku (max kontrast)
+STATBAR_RED = (150, 35, 35, 255)  # pasek błędu (spójny styl z paskiem statusu)
 
 # evdev — REALNE kody TEGO egzemplarza (RG40XX V), zweryfikowane empirycznie:
 #   źródło = logi /mnt/data/anberwm.log + /mnt/data/anberpkm.log (faktycznie
 #   emitowane kody) oraz działający handler AnberWM (komentarz „realna mapa”).
-#   Barki:  L1=312 (krok−) · L2=314 (krok+) · R1=309 (wolne) · R2=315 (PDF).
 #   UWAGA: nominalne kody 310/311/313 z „kanonicznej” mapy NIE są emitowane na
 #   tym urządzeniu — dlatego stare BTN_R2=313 było MARTWE i R2 nie robił PDF-a.
 #   Z AnberPKM/AnberWM bierzemy TYLKO kody przycisków, NIE logikę obsługi wartości.
+#   Barki (zbiór kodów tego egzemplarza = {309,312,314,315}; L2=314 i R2=315
+#   potwierdzone działaniem): L1=309 (krok−) · R1=312 (wolne) · L2=314 (krok+) ·
+#   R2=315 (PDF). L1/R1 = inferencja przez eliminację 2026-07-12 — user
+#   potwierdził, że fizyczny L1 NIE emituje 312, więc 312≠L1 → przez eliminację
+#   L1=309, R1=312. POTWIERDZIĆ pomiarem (log evdev) gdy konsola stabilna.
 EV_KEY, EV_ABS = 1, 3
 BTN_A, BTN_X = 304, 307
-BTN_L1, BTN_L2 = 312, 314        # L1 = rozmiar kroku −, L2 = rozmiar kroku +
+BTN_L1, BTN_L2 = 309, 314        # L1 = rozmiar kroku −, L2 = rozmiar kroku +
+BTN_R1 = 312                     # R1 = wolne (bez akcji), zdefiniowane dla jasności
 BTN_R2 = 315                     # R2 = raport PDF (realny kod; 313 był martwy)
 BTN_MODE, KEY_MENU = 316, 354
 EXIT_KEYS = {BTN_MODE, KEY_MENU}
@@ -280,7 +288,7 @@ class VcApp:
             params['vc_unit'] = VC_UNITS[int(self.vals['vc_unit'])]
             operacja = PRESETS[int(self.vals['preset'])]['name']
             path = generate_pdf(params, self.rec, operacja)
-            self._status = f'Zapisano PDF: {path}'
+            self._status = 'Zapisano raport PDF ✓'   # KRÓTKI (pełna ścieżka tylko w logu)
             self._log(f'PDF: {path}')
         except Exception as e:
             self._status = f'Błąd PDF: {e}'
@@ -313,9 +321,26 @@ class VcApp:
         return txt + '…'
 
     def _wrap(self, txt, font, maxpx):
-        """Zawijanie po słowach do maxpx px (wieloliniowo, BEZ ucinania treści)."""
+        """Zawijanie po słowach do maxpx px (wieloliniowo, BEZ ucinania treści).
+        Pojedyncze „słowo" dłuższe niż cała dostępna szerokość (np. długa
+        ścieżka pliku bez spacji w komunikacie błędu) jest dodatkowo łamane
+        ZNAK PO ZNAKU — inaczej sama tokenizacja po spacjach nie chroni przed
+        wyjściem poza 640×480 (klasa błędu: długi błąd bez spacji ucieka
+        z paska statusu)."""
         words, lines, cur = txt.split(' '), [], ''
         for w in words:
+            if self.draw.textlength(w, font=font) > maxpx:   # słowo samo w sobie za długie
+                if cur:
+                    lines.append(cur); cur = ''
+                chunk = ''
+                for ch in w:
+                    trial = chunk + ch
+                    if chunk and self.draw.textlength(trial, font=font) > maxpx:
+                        lines.append(chunk); chunk = ch
+                    else:
+                        chunk = trial
+                cur = chunk
+                continue
             trial = w if not cur else cur + ' ' + w
             if cur and self.draw.textlength(trial, font=font) > maxpx:
                 lines.append(cur); cur = w
@@ -324,6 +349,26 @@ class VcApp:
         if cur:
             lines.append(cur)
         return lines
+
+    def _status_bar(self, y, txt, bg, fg, font=None):
+        """Pasek statusu: prostokąt tła pełnej szerokości + tekst WYŚRODKOWANY —
+        przywrócony/odtworzony motyw komunikatu 'Generuję PDF...' / stanu po
+        zapisie (czytelny pomarańczowy pasek zamiast zwykłego tekstu na tle).
+        Zwraca y ZA paskiem (do dalszego układu)."""
+        d = self.draw
+        font = font or self.f_sm
+        x0, x1 = 10, W - 10
+        pad = 6
+        lines = self._wrap(txt, font, x1 - x0 - 2 * pad)
+        line_h = 15
+        h = 2 * pad + len(lines) * line_h
+        d.rectangle([(x0, y), (x1, y + h)], fill=bg, outline=(0, 0, 0, 120), width=1)
+        ty = y + pad
+        for line in lines:
+            tw = d.textlength(line, font=font)
+            self._t(x0 + (x1 - x0 - tw) // 2, ty, line, font, fg)
+            ty += line_h
+        return y + h + 6
 
     def _fmt_val(self, name, v):
         if name == 'vc_unit':
@@ -409,23 +454,25 @@ class VcApp:
                 self._t(rx + 214, ty, flag, self.f_sm, fcol)
                 ty += 16
 
-        # komunikaty (status PDF / ostrzeżenia) — lewy dolny obszar, ZAWIJANE (bez ucinania)
+        # komunikaty (status PDF / ostrzeżenia) — pasek statusu, ZAWIJANE (bez ucinania)
         show_status = self._status and sdl2.SDL_GetTicks() < self._status_until
-        msgs = []
+        wy = 330
         if show_status:
-            msgs.append((self._status, RED if self._status.startswith('Błąd') else GRN))
+            # pasek statusu: pomarańczowy dla „Generuję PDF…”/„Zapisano…”,
+            # czerwony (ten sam mechanizm paska) dla błędu — czytelny motyw
+            # zamiast zwykłego tekstu na tle
+            is_err = self._status.startswith('Błąd') or self._status.startswith('Brak')
+            bg, fg = (STATBAR_RED, FG) if is_err else (ORANGE, ORANGE_TX)
+            wy = self._status_bar(wy, self._status, bg, fg)
         elif r and r.warnings:
             for w in r.warnings:
-                msgs.append(('! ' + w, RED))
-        wy = 330
-        for txt, col in msgs:
-            for line in self._wrap(txt, self.f_sm, 300):
+                for line in self._wrap('! ' + w, self.f_sm, 300):
+                    if wy > H - 30:
+                        break
+                    self._t(12, wy, line, self.f_sm, RED)
+                    wy += 15
                 if wy > H - 30:
                     break
-                self._t(12, wy, line, self.f_sm, col)
-                wy += 15
-            if wy > H - 30:
-                break
 
         # stopka
         self._t(12, H - 14,

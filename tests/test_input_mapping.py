@@ -59,9 +59,14 @@ def test_r2_code_is_real_device_value():
 
 
 def test_shoulder_step_codes():
-    # L1 = 312 (krok−), L2 = 314 (krok+) — z realnej mapy egzemplarza
-    assert _const_value('BTN_L1') == 312
+    # L1 = 309 (krok−), L2 = 314 (krok+) — inferencja przez eliminację
+    # 2026-07-12 (user potwierdził, że fizyczny L1 NIE emituje 312; zbiór
+    # kodów tego egzemplarza = {309,312,314,315}, L2=314/R2=315 potwierdzone
+    # działaniem → przez eliminację 312≠L1, więc L1=309). POTWIERDZIĆ
+    # pomiarem gdy konsola stabilna.
+    assert _const_value('BTN_L1') == 309
     assert _const_value('BTN_L2') == 314
+    assert _const_value('BTN_R1') == 312   # R1 zdefiniowany, bez akcji
 
 
 def test_dead_code_313_not_used_as_r2():
