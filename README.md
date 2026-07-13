@@ -57,7 +57,8 @@ n_bezp = min( 80·60/(π·0,125),  12500,  12000 )
 - Ostrzeżenia na czerwono (narzędzie za duże / przekroczenie limitu)
 - Regulacja z **krokiem i szybkim krokiem** (model jak AnberPKM/AnberWM)
 - **Raport PDF do druku (A4)** przyciskiem **R2** — wspólny silnik raportów serii
-  (reportlab), zapis do `/mnt/data/anbervc_raporty/`
+  (reportlab), zapis do `/mnt/data/sprawozdania/raporty/AnberVc`
+  (nadpisywalne zmienną `ANBERVC_REPORT_DIR`)
 - Liczby z polskim separatorem dziesiętnym (przecinek), jednostki jawne
 - **Persystencja** ostatnio użytych parametrów — `/mnt/data/anbervc_config.json`
   (przeżywa restart; uszkodzony/brak → domyślny preset bez crasha)
@@ -72,14 +73,18 @@ Pełna mapa: [KEYS.md](KEYS.md).
 | Przycisk              | Akcja                                        |
 |-----------------------|----------------------------------------------|
 | D-pad ↑/↓             | wybór parametru                              |
-| D-pad ←/→             | − / + wartość o bieżący krok                 |
-| **L1/R1**, **L2/R2**  | szybki krok − / + (L2/R2 większy)            |
-| **Y**                 | zmiana kroku (0.1 / 1 / 10 / 100 / 1000)     |
+| D-pad ←/→             | − / + wartość o bieżący rozmiar kroku        |
+| **L1**                | rozmiar kroku − (mniejszy: 0.1 / 1 / 10 / 100 / 1000) |
+| **L2**                | rozmiar kroku + (większy)                    |
 | **A**                 | reset zaznaczonego pola do presetu           |
-| **X**                 | reset wszystkich pól do presetu              |
+| **X**                 | wczytanie presetu (reset wszystkich pól)     |
 | **R2**                | generuj raport PDF do druku (A4)             |
 | **MENU / MODE**       | wyjście                                      |
 | **POWER**             | ekran off/on (apka działa dalej)             |
+
+> Na egzemplarzu Karola **L1 jest nierozróżnialny od SELECT/START** — „krok −”
+> wyzwala cała pula kodów `{308, 310, 311, 312, 313}`; kod R1 (309) jest bez
+> akcji. Szczegóły i źródło prawdy: [KEYS.md](KEYS.md) + `app/main.py`.
 
 ## Wymagania
 

@@ -4,6 +4,7 @@
 build_meta / report_filename są czyste (bez reportlab) — testowane zawsze.
 generate_pdf wymaga reportlab + fontów DejaVu — uruchamiane gdy dostępne.
 """
+import math
 import sys
 import pathlib
 
@@ -11,6 +12,23 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import pytest  # noqa: E402
 import vc_lib as vc  # noqa: E402
 from vc_lib import report  # noqa: E402
+
+
+def _row(meta, opis):
+    """Zwraca wiersz wzoru (opis, wzor, podstawienie, wynik) z meta['wzory']."""
+    for r in meta['wzory']:
+        if r[0] == opis:
+            return r
+    raise AssertionError(f'brak wiersza wzoru {opis!r} w {meta["wzory"]}')
+
+
+def _eval_subst(s):
+    """Oblicz liczbowo tekst podstawienia z raportu (π, ·, przecinek dziesiętny)."""
+    expr = (s.replace('π', f'({math.pi!r})')
+             .replace('·', '*')
+             .replace('×', '*')
+             .replace(',', '.'))
+    return eval(expr, {'__builtins__': {}}, {})  # noqa: S307 — tylko liczby/operatory
 
 
 def _params(**over):
@@ -49,6 +67,52 @@ def test_build_meta_polish_decimal_comma():
     # w tabeli nastawień też przecinki
     joined = ' '.join(o for o, _ in meta['warunki'])
     assert ',' in joined and '.' not in joined.replace('v_c', '')
+
+
+def test_build_meta_ms_formula_uses_div60():
+    """m/s (bez zmian): wzór i podstawienie w postaci /60, wynik w m/s."""
+    p = _params()
+    rec = vc.recommend(**{k: p[k] for k in (
+        'rpm_min', 'rpm_max', 'n_settings', 'tool_max_rpm', 'vc', 'vc_unit',
+        'diameter_mm')})
+    meta = report.build_meta(p, rec, 'Szlifowanie tarcza 125')
+    _, wzor, podst, wynik = _row(meta, 'Prędkość skrawania')
+    assert '/60' in wzor and '/1000' not in wzor
+    assert podst.endswith('/60')
+    assert wynik.endswith('m/s')
+    # podstawienie liczbowo spójne z wynikiem (m/s)
+    assert round(_eval_subst(podst), 1) == round(rec.rec_v, 1)
+
+
+def test_build_meta_mmin_formula_and_subst_consistent():
+    """BLOKER: dla m/min wzór, podstawienie i wynik MUSZĄ być w tej samej
+    jednostce i liczbowo spójne (frezowanie Al: D=8 mm, n=4600 → ≈115,6 m/min).
+    Wcześniej raport drukował /60 (m/s) przy wyniku w m/min → rozjazd."""
+    p = _params(diameter_mm=8.0, vc=150.0, vc_unit='m/min',
+                rpm_min=1000, rpm_max=10000, n_settings=6, tool_max_rpm=100000)
+    rec = vc.recommend(**{k: p[k] for k in (
+        'rpm_min', 'rpm_max', 'n_settings', 'tool_max_rpm', 'vc', 'vc_unit',
+        'diameter_mm')})
+    # kontrola oracle: rekomendacja i wynik w m/min
+    assert rec.vc_unit == 'm/min'
+    assert rec.recommended_k == 3 and abs(rec.rec_rpm - 4600) < 1e-6
+    assert abs(rec.rec_v - 115.6106) < 0.05
+
+    meta = report.build_meta(p, rec, 'Frezowanie Al HSS')
+    opis, wzor, podst, wynik = _row(meta, 'Prędkość skrawania')
+
+    # wzór spójny z jednostką m/min (postać /1000, NIE /60)
+    assert '/1000' in wzor and '/60' not in wzor
+    # podstawienie w tej samej postaci co wzór
+    assert podst.endswith('/1000')
+    # wynik w m/min
+    assert wynik.endswith('m/min') and '115,6' in wynik
+    # SPÓJNOŚĆ LICZBOWA: podstawienie == wynik (po zaokrągleniu do 1 miejsca)
+    assert round(_eval_subst(podst), 1) == round(rec.rec_v, 1) == 115.6
+
+    # wiersz obrotów bezpiecznych też w postaci m/min (*1000/, nie *60/)
+    _, wzor_nb, _, _ = _row(meta, 'Obroty bezpieczne')
+    assert '*1000/' in wzor_nb and '*60/' not in wzor_nb
 
 
 def test_build_meta_warning_when_too_large():

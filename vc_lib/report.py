@@ -76,8 +76,22 @@ def build_meta(params: dict, rec: Recommendation, operacja: str,
         ('n_narz', 'Obroty znamionowe narzędzia',   _pl(params["tool_max_rpm"]), 'obr/min'),
     ]
 
+    # Wzór/podstawienie MUSZĄ być w tej samej jednostce co wynik (rec.rec_v).
+    # core.py: v_c[m/s]   = π·D[m]·n/60      (D w metrach)
+    #          v_c[m/min] = π·D[mm]·n/1000   (D w mm; = 60·v_c[m/s])
+    # n_bezp analogicznie:  m/s → v_c·60/(π·D[m]);  m/min → v_c·1000/(π·D[mm]).
+    if unit == 'm/min':
+        formula_v = 'v_c = pi*D*n/1000  (D w mm)'
+        formula_nbezp = 'n_bezp = min(v_c*1000/(pi*D); n_narz; n_max)'
+    else:
+        formula_v = 'v_c = pi*D*n/60'
+        formula_nbezp = 'n_bezp = min(v_c*60/(pi*D); n_narz; n_max)'
+
     if rec.recommended_k is not None:
-        podst_v = f'π·{_pl(D / 1000)}·{_pl(rec.rec_rpm, 0)}/60'
+        if unit == 'm/min':
+            podst_v = f'π·{_pl(D)}·{_pl(rec.rec_rpm, 0)}/1000'   # D w mm
+        else:
+            podst_v = f'π·{_pl(D / 1000)}·{_pl(rec.rec_rpm, 0)}/60'  # D w metrach
         wynik_v = f'{_pl(rec.rec_v, 1)} {unit}'
         wynik_rec = f'nastawienie {rec.recommended_k} = {_pl(rec.rec_rpm, 0)} obr/min'
         wynik_margin = f'{_pl(rec.margin_pct, 1)} %'
@@ -88,8 +102,8 @@ def build_meta(params: dict, rec: Recommendation, operacja: str,
         wynik_margin = '—'
 
     wzory = [
-        ('Prędkość skrawania', 'v_c = pi*D*n/60', podst_v, wynik_v),
-        ('Obroty bezpieczne', 'n_bezp = min(v_c*60/(pi*D); n_narz; n_max)',
+        ('Prędkość skrawania', formula_v, podst_v, wynik_v),
+        ('Obroty bezpieczne', formula_nbezp,
          '', f'{_pl(rec.n_safe, 0)} obr/min'),
         ('Wiążące ograniczenie', BINDING_PL.get(rec.binding, rec.binding), '', ''),
         ('Rekomendacja', 'najwyższe k: n_k <= n_bezp', '', wynik_rec),
