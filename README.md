@@ -120,7 +120,7 @@ GitHub Actions (`.github/workflows/ci.yml`) przy każdym push/PR: AST parse + ru
 
 ## Licencja
 
-MIT — © 2026 Karol Furtak. Zobacz [LICENSE](LICENSE).
+Copyright (c) 2026 Karol Furtak. **Wszelkie prawa zastrzeżone.** Użycie komercyjne, kopiowanie, rozpowszechnianie i modyfikowanie wyłącznie za pisemną zgodą autora — szczegóły w pliku [LICENSE](LICENSE).
 
 ---
 
